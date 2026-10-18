@@ -7,7 +7,8 @@
 # ---------- dependencias ----------
 FROM node:22-alpine AS deps
 WORKDIR /app
-RUN npm install -g pnpm@10.34.7
+# argon2 compila un módulo nativo con node-gyp: necesita toolchain de C y python3.
+RUN apk add --no-cache python3 make g++ && npm install -g pnpm@10.34.7
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/backend/package.json apps/backend/package.json
 COPY apps/web/package.json apps/web/package.json
