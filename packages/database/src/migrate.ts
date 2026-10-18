@@ -5,8 +5,10 @@
  * - Aplica en orden los ficheros `migrations/NNN_*.sql` pendientes.
  * - Cada migración corre dentro de su propia transacción y queda registrada.
  *
- * Uso: `pnpm --filter @jobforce/database migrate` (tras `pnpm build`),
+ * Uso como CLI: `pnpm --filter @jobforce/database migrate` (tras `pnpm build`),
  * con `DATABASE_URL` definida en el entorno.
+ *
+ * Uso programático (el backend lo ejecuta al arrancar): `runMigrations(url)`.
  */
 
 import { readdir, readFile } from 'node:fs/promises';
@@ -15,12 +17,8 @@ import { Client } from 'pg';
 
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 
-async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL no está definida. Copia .env.example a .env y rellénala.');
-  }
-
+/** Aplica todas las migraciones pendientes contra la base de datos indicada. */
+export async function runMigrations(databaseUrl: string): Promise<void> {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   try {
@@ -60,7 +58,18 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error('[migrate] ERROR:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+async function main(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('DATABASE_URL no está definida. Copia .env.example a .env y rellénala.');
+  }
+  await runMigrations(databaseUrl);
+}
+
+// Solo se ejecuta como CLI cuando este fichero es el punto de entrada.
+if (require.main === module) {
+  main().catch((err: unknown) => {
+    console.error('[migrate] ERROR:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

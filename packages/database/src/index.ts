@@ -7,6 +7,9 @@
 
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 
+export { runMigrations } from './migrate.js';
+export type { PoolClient, QueryResultRow };
+
 let pool: Pool | undefined;
 
 /** Devuelve el pool compartido, creándolo en el primer uso. */
