@@ -106,10 +106,17 @@ export async function registerAuthRoutes(app: FastifyInstance, config: AppConfig
           max: 10,
           timeWindow: '5 minutes',
           keyGenerator: (req) => req.ip,
-          errorResponseBuilder: (_req, context) => ({
-            error: 'demasiados_intentos',
-            reintentar_en_ms: context.ttl,
-          }),
+          // El plugin hace `throw` del valor devuelto: debe ser un Error con
+          // statusCode 429 (un objeto plano lo convertiría en 500).
+          errorResponseBuilder: (_req, context) => {
+            const err = new Error('demasiados_intentos') as Error & {
+              statusCode?: number;
+              payload?: unknown;
+            };
+            err.statusCode = 429;
+            err.payload = { error: 'demasiados_intentos', reintentar_en_ms: context.ttl };
+            return err;
+          },
         },
       },
     },

@@ -33,6 +33,11 @@ export function buildServer(config: AppConfig): FastifyInstance {
     if (err.validation) {
       return reply.code(400).send({ error: 'datos_invalidos' });
     }
+    // Cuerpo personalizado del error (p. ej. el 429 del rate limit con su reintento).
+    const customPayload = (err as FastifyError & { payload?: unknown }).payload;
+    if (err.statusCode === 429 && customPayload !== undefined) {
+      return reply.code(429).send(customPayload);
+    }
     req.log.error({ msg: 'error interno', code: err.code });
     const statusCode = err.statusCode && err.statusCode < 500 ? err.statusCode : 500;
     return reply.code(statusCode).send({
