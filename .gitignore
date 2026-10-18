@@ -27,3 +27,6 @@ Thumbs.db
 
 # Override local de compose (el .example sí se commitea)
 infra/docker-compose.override.yml
+
+# Tipos generados por Next.js
+next-env.d.ts
