@@ -15,7 +15,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 # argon2 compila un módulo nativo con node-gyp: necesita toolchain de C y python3.
 RUN apk add --no-cache python3 make g++ && npm install -g pnpm@10.34.7
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
 COPY apps ./apps
 COPY packages ./packages
 RUN pnpm install --frozen-lockfile && pnpm build
