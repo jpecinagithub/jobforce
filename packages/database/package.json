@@ -1,0 +1,21 @@
+{
+  "dependencies": {
+    "@jobforce/domain": "workspace:*",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "typescript": "5.9.3"
+  },
+  "main": "./dist/index.js",
+  "name": "@jobforce/database",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "migrate": "node dist/migrate.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "types": "./dist/index.d.ts",
+  "version": "0.1.0"
+}

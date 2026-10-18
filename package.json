@@ -1,0 +1,18 @@
+{
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": "22",
+    "pnpm": "10.34.7"
+  },
+  "name": "jobforce",
+  "packageManager": "pnpm@10.34.7",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --filter @jobforce/domain build && pnpm --filter @jobforce/config build && pnpm -r --if-present build",
+    "migrate": "pnpm --filter @jobforce/database migrate",
+    "typecheck": "pnpm run build && pnpm -r --if-present typecheck"
+  },
+  "version": "0.1.0"
+}

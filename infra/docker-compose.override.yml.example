@@ -1,0 +1,12 @@
+# Ejemplo de override para DESARROLLO LOCAL.
+# Copiar a `docker-compose.override.yml` (misma carpeta; está en .gitignore).
+# Publica postgres solo en localhost, para conectar herramientas locales
+# (psql, DBeaver...) sin exponerlo a la red.
+#
+# Con este override, DATABASE_URL en el .env local debe apuntar a 127.0.0.1:
+#   DATABASE_URL=postgres://jobforce:TU_CLAVE@127.0.0.1:5432/jobforce
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"

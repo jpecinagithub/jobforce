@@ -1,0 +1,41 @@
+# JOBFORCE · Compose para el servidor (Fase 1)
+#
+# Uso desde la carpeta infra/:
+#   docker compose --env-file ../.env up -d --build
+#
+# El .env vive en la RAÍZ del repo (ver .env.example). No commitear el .env real.
+
+name: jobforce
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - ../.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER:-jobforce}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    # Sin puertos publicados: solo visible dentro de la red de compose.
+
+  backend:
+    build:
+      context: ..
+      dockerfile: apps/backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    restart: unless-stopped
+    # Sin puertos publicados en el compose base: la exposición se hará
+    # vía proxy inverso en el servidor.
+
+volumes:
+  pgdata:
+    name: jobforce_pgdata

@@ -1,0 +1,29 @@
+# Dependencias
+node_modules/
+
+# Entorno y secretos (nunca commitear el .env real)
+.env
+.env.local
+.env.*.local
+
+# Salida de compilación
+dist/
+build/
+.next/
+out/
+
+# Herramientas
+.eve/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Override local de compose (el .example sí se commitea)
+infra/docker-compose.override.yml
