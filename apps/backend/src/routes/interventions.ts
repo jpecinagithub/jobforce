@@ -30,7 +30,8 @@ const ListQuery = z.object({
 
 const ResolveBody = z.object({
   resolution: z.enum(['resuelta', 'descartada']),
-  note: z.string().trim().min(1, 'la nota de resolución es obligatoria').max(5000),
+  // La nota es opcional en el frontal desde F6.1: si no llega, se guarda ''.
+  note: z.string().trim().max(5000, 'la nota no puede superar 5000 caracteres').optional().default(''),
 });
 
 interface InterventionRow {

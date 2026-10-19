@@ -60,7 +60,7 @@ export type InterventionKind =
   | 'envio_incierto'
   | 'error_tecnico';
 
-export type InterventionStatus = 'pendiente' | 'resuelta' | 'descartada';
+export type InterventionStatus = 'abierta' | 'resuelta' | 'descartada';
 
 export interface Intervention {
   id: string;
@@ -98,7 +98,7 @@ export const KIND_LABELS: Record<string, string> = {
 };
 
 export const INTERVENTION_STATUS_LABELS: Record<string, string> = {
-  pendiente: 'Pendiente',
+  abierta: 'Abierta',
   resuelta: 'Resuelta',
   descartada: 'Descartada',
 };
