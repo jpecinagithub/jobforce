@@ -11,6 +11,8 @@ TypeScript. Páginas en español, estilo CSS propio sin dependencias pesadas.
 | `/`              | Inicio: tarjetas de estado (perfil, respuestas, configuración, integraciones) y navegación. |
 | `/perfil`        | Versión activa del perfil con hechos agrupados por categoría; lista de versiones con botón "Activar". |
 | `/respuestas`    | Lista de respuestas guardadas + formulario de alta.           |
+| `/campanas`      | Lista de campañas de búsqueda + formulario de nueva campaña.  |
+| `/campanas/[id]` | Detalle de campaña: editor de criterios, lanzar búsqueda, tabla de ofertas, informe. |
 | `/configuracion` | Configuración actual en solo lectura.                         |
 
 El `middleware.ts` redirige a `/login` cuando no existe la cookie de sesión

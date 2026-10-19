@@ -94,6 +94,7 @@ h3 { margin: 1.25rem 0 0.5rem; font-size: 1.05rem; }
 
 .badge.pending { background: #fef3c7; color: #92400e; }
 .badge.active { background: #dcfce7; color: #166534; }
+.badge.danger { background: #fee2e2; color: #991b1b; }
 
 .form { max-width: 420px; }
 
