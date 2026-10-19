@@ -32,6 +32,9 @@ const RawConfigSchema = z.object({
     .trim()
     .transform((v) => (v === '' ? undefined : v))
     .optional(),
+  // Worker del ejecutor de envíos (Fase 4+). Desactivado por defecto: solo se
+  // activa explícitamente en el despliegue donde deba correr el worker.
+  SENDER_WORKER_ENABLED: BooleanFromEnv,
 });
 
 const ConfigSchema = RawConfigSchema.transform((raw) => ({
@@ -46,6 +49,8 @@ const ConfigSchema = RawConfigSchema.transform((raw) => ({
   // null cuando EXA_API_KEY no está definida: la búsqueda queda deshabilitada
   // (503) hasta que se configure. El valor nunca se incluye en logs ni auditoría.
   exaApiKey: raw.EXA_API_KEY ?? null,
+  // Worker del ejecutor de envíos: desactivado por defecto.
+  senderWorkerEnabled: raw.SENDER_WORKER_ENABLED ?? false,
 }));
 
 export type AppConfig = z.output<typeof ConfigSchema>;

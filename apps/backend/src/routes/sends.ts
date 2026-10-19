@@ -84,11 +84,16 @@ interface ApplicationRow {
   offer_company: string | null;
   score: string | null;
   mandatory_verdict: string | null;
+  offer_snapshot: Record<string, unknown>;
 }
 
-async function loadApplication(id: string): Promise<ApplicationRow | null> {
+/** Exportada para el ejecutor de envíos (mismo shape que usa runPresendChecks). */
+export type { ApplicationRow };
+
+async function loadApplicationInternal(id: string): Promise<ApplicationRow | null> {
   const rows = await query<ApplicationRow>(
     `SELECT a.id, a.campaign_id, a.offer_id, a.status, a.portal,
+            a.offer_snapshot,
             o.url AS offer_url, o.company AS offer_company,
             e.score::text AS score, e.mandatory_verdict
        FROM applications a
@@ -102,6 +107,14 @@ async function loadApplication(id: string): Promise<ApplicationRow | null> {
     [id],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Carga una candidatura con su oferta y última evaluación.
+ * Exportada para el ejecutor de envíos (`apps/backend/src/sender/`).
+ */
+export async function loadApplication(id: string): Promise<ApplicationRow | null> {
+  return loadApplicationInternal(id);
 }
 
 async function countSendsSince(sqlInterval: string): Promise<number> {
@@ -127,8 +140,17 @@ async function gastoMesUsd(): Promise<number> {
  * Ejecuta los 9 checks pre-envío. Ningún check se simula como OK: donde no
  * hay una fuente real (sonda de vigencia), el check falla con su detalle.
  * Devuelve también las métricas de cuota/presupuesto para la decisión.
+ *
+ * La sonda de vigencia puede pasarse como segundo argumento (la usa el
+ * ejecutor de envíos); si no se pasa, se usa la inyectada con
+ * `setSendTestDeps` (tests); sin ninguna, el check `oferta_vigente` falla
+ * de forma explícita.
  */
-export async function runPresendChecks(app: ApplicationRow): Promise<{
+export async function runPresendChecks(
+  app: ApplicationRow,
+  offerProbe?: (ctx: OfferProbeContext) => Promise<OfferProbeResult>,
+  opts: { excluirSendId?: string } = {},
+): Promise<{
   checks: CheckResultado[];
   metricas: { enviosHoy: number; enviosSemana: number; gastoMesUsd: number };
 }> {
@@ -150,22 +172,34 @@ export async function runPresendChecks(app: ApplicationRow): Promise<{
     detalle: paradaGlobal ? 'parada global activa' : 'parada global desactivada',
   });
 
-  // 3) La candidatura está aprobada por Jon.
+  // 3) La candidatura está aprobada por Jon — o la aprobación está cubierta
+  //    por la autorización escrita en modo automático (la autorización escrita
+  //    ES la aprobación en ese modo; exigir además un "approved" manual
+  //    dejaría el modo automático inoperante, contra el diseño de
+  //    `evaluarEnvio`, que no pide aprobación por candidatura en automático).
+  const autoAutorizado =
+    policy?.policy.modoActivo === 'ejecutar_automatico' && policy.authorized_by !== null;
+  const aprobada = app.status === 'approved' || autoAutorizado;
   checks.push({
     check: 'oferta_aprobada',
-    ok: app.status === 'approved',
-    detalle: `estado de la candidatura: ${app.status}`,
+    ok: aprobada,
+    detalle: app.status === 'approved'
+      ? 'estado de la candidatura: approved'
+      : autoAutorizado
+        ? 'aprobación cubierta por la autorización escrita (modo automático)'
+        : `estado de la candidatura: ${app.status}`,
   });
 
   // 4) La oferta sigue vigente (sonda inyectable; sin sonda → fallo explícito).
-  if (testDeps.offerProbe) {
+  const probe = offerProbe ?? testDeps.offerProbe;
+  if (probe) {
     try {
-      const probe = await testDeps.offerProbe({
+      const resultado = await probe({
         applicationId: app.id,
         offerUrl: app.offer_url,
         portal: app.portal,
       });
-      checks.push({ check: 'oferta_vigente', ok: probe.ok, detalle: probe.detalle });
+      checks.push({ check: 'oferta_vigente', ok: resultado.ok, detalle: resultado.detalle });
     } catch (err) {
       checks.push({
         check: 'oferta_vigente',
@@ -181,11 +215,13 @@ export async function runPresendChecks(app: ApplicationRow): Promise<{
     });
   }
 
-  // 5) No hay otro envío no fallido para esta candidatura.
+  // 5) No hay otro envío no fallido para esta candidatura (excluyendo el
+  //    propio envío cuando lo indica el ejecutor: ya está en `sending`).
   const duplicados = await query<{ n: string }>(
     `SELECT COUNT(*)::text AS n FROM sends
-      WHERE application_id = $1 AND status <> 'failed'`,
-    [app.id],
+      WHERE application_id = $1 AND status <> 'failed'
+        AND ($2::uuid IS NULL OR id <> $2::uuid)`,
+    [app.id, opts.excluirSendId ?? null],
   );
   checks.push({
     check: 'sin_duplicados',

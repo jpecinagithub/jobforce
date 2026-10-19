@@ -57,7 +57,8 @@ export type InterventionKind =
   | 'pregunta_ambigua'
   | 'captcha_mfa'
   | 'fuera_de_politica'
-  | 'envio_incierto';
+  | 'envio_incierto'
+  | 'error_tecnico';
 
 export type InterventionStatus = 'pendiente' | 'resuelta' | 'descartada';
 
@@ -93,6 +94,7 @@ export const KIND_LABELS: Record<string, string> = {
   captcha_mfa: 'CAPTCHA / MFA',
   fuera_de_politica: 'Fuera de política',
   envio_incierto: 'Envío incierto',
+  error_tecnico: 'Error técnico',
 };
 
 export const INTERVENTION_STATUS_LABELS: Record<string, string> = {

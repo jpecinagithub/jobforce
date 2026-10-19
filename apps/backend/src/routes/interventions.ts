@@ -24,7 +24,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ListQuery = z.object({
   status: z.enum(['abierta', 'resuelta', 'descartada']).optional(),
   kind: z
-    .enum(['datos_desconocidos', 'pregunta_ambigua', 'captcha_mfa', 'fuera_de_politica', 'envio_incierto'])
+    .enum(['datos_desconocidos', 'pregunta_ambigua', 'captcha_mfa', 'fuera_de_politica', 'envio_incierto', 'error_tecnico'])
     .optional(),
 });
 
