@@ -30,15 +30,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setSession = useCallback((user: string, token: string) => {
     hasSession.current = true;
+    try {
+      sessionStorage.setItem('jobforce_csrf', token);
+      sessionStorage.setItem('jobforce_user', user);
+    } catch {
+      /* almacenamiento no disponible: se sigue solo en memoria */
+    }
     setUsername(user);
     setCsrfToken(token);
   }, []);
 
   // Restaura la sesión tras recargas o pestañas nuevas: el token CSRF vive
-  // en memoria y se pierde al recargar, pero /api/auth/me lo devuelve para
-  // la sesión de la cookie.
+  // en memoria y se pierde al recargar. Primero se intenta sessionStorage
+  // (misma pestaña); si no hay, /api/auth/me lo devuelve para la sesión
+  // de la cookie (requiere backend con el fix).
   useEffect(() => {
     if (hasSession.current) return;
+    try {
+      const t = sessionStorage.getItem('jobforce_csrf');
+      if (t) {
+        setSession(sessionStorage.getItem('jobforce_user') ?? '', t);
+        return;
+      }
+    } catch {
+      /* sin sessionStorage: se intenta /me */
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -58,6 +74,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [setSession]);
 
   const clearSession = useCallback(() => {
+    hasSession.current = false;
+    try {
+      sessionStorage.removeItem('jobforce_csrf');
+      sessionStorage.removeItem('jobforce_user');
+    } catch {
+      /* nada que limpiar */
+    }
     setUsername(null);
     setCsrfToken(null);
   }, []);
