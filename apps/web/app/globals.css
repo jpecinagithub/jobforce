@@ -391,3 +391,11 @@ pre.json {
 @media (max-width: 560px) { .filters { grid-template-columns: 1fr; } }
 
 .resolve-form input[type="text"] { max-width: 260px; margin-bottom: 0.5rem; }
+
+/* Propuesta "Color front" (cambio/8797f716-color-front): fondo rojo */
+:root {
+  --bg: #7f1d1d;
+  --bg2: #991b1b;
+  --panel: #8a2020;
+  --panel2: #a12727;
+}
