@@ -144,7 +144,7 @@ describe('auth', () => {
     const auth = await setupAndLogin(app);
     const me = await app.inject({ method: 'GET', url: '/api/auth/me', headers: authed(auth, false) });
     assert.equal(me.statusCode, 200);
-    assert.deepEqual(me.json(), { username: 'admin' });
+    assert.deepEqual(me.json(), { username: 'admin', csrfToken: auth.csrfToken });
   });
 
   it('una cookie manipulada no autentica (401)', async () => {

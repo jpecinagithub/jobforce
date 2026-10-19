@@ -5,7 +5,7 @@
  * - POST /api/auth/login  → inicia sesión (rate limit por IP: 10 intentos / 5 min
  *   por defecto; configurable con LOGIN_RATE_LIMIT_MAX / LOGIN_RATE_LIMIT_WINDOW_MS).
  * - POST /api/auth/logout → cierra la sesión actual.
- * - GET  /api/auth/me     → devuelve el usuario de la sesión.
+ * - GET  /api/auth/me     → devuelve el usuario y el token CSRF de la sesión.
  *
  * Ninguna ruta de aquí exige cabecera CSRF (setup y login están exentas
  * por contrato; logout la exige como cualquier otra ruta mutadora).
@@ -190,8 +190,11 @@ export async function registerAuthRoutes(app: FastifyInstance, config: AppConfig
     },
   );
 
-  // GET /api/auth/me — usuario de la sesión actual.
+  // GET /api/auth/me — usuario y token CSRF de la sesión actual.
+  // El token se devuelve para que el frontal pueda restaurar la sesión
+  // tras una recarga (en memoria se pierde).
   app.get('/api/auth/me', { preHandler: [requireSession] }, async (req) => ({
     username: req.authSession?.username ?? '',
+    csrfToken: req.authSession?.csrfToken ?? '',
   }));
 }
