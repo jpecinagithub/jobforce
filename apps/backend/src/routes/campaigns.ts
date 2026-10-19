@@ -1,0 +1,790 @@
+/**
+ * @jobforce/backend — Rutas de campañas de búsqueda (Fase 2).
+ *
+ * - GET    /api/campaigns                        → lista con contadores.
+ * - POST   /api/campaigns                        → crea una campaña (201).
+ * - GET    /api/campaigns/:id                    → detalle (404 si no existe).
+ * - PUT    /api/campaigns/:id                    → actualización parcial.
+ * - POST   /api/campaigns/:id/search             → lanza búsquedas en Exa.
+ * - GET    /api/campaigns/:id/offers             → ofertas con su evaluación.
+ * - GET    /api/campaigns/:id/offers/:offerId    → detalle de oferta.
+ * - POST   /api/campaigns/:id/evaluate           → re-evalúa todas las ofertas.
+ * - GET    /api/campaigns/:id/report             → genera y guarda el informe.
+ *
+ * Todas exigen sesión; las mutadoras además exigen cabecera CSRF.
+ * Ver CONTRATO Fase 2 §6 (~/workspace/jobforce/fase2/CONTRATO_API.md).
+ *
+ * Reglas de dinero: el presupuesto se comprueba ANTES de crear el cliente de
+ * Exa; la clave de Exa (`config.exaApiKey`) nunca se loguea ni se audita.
+ */
+
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import type { AppConfig } from '@jobforce/config';
+import type {
+  Campaign,
+  CampaignCriteria,
+  MandatoryRequirement,
+  PreferenceDim,
+  PreferenceKey,
+} from '@jobforce/domain';
+import { defaultCriteria } from '@jobforce/domain';
+import { query } from '@jobforce/database';
+import {
+  canonicalUrl,
+  createExaClient,
+  EXA_COST_ESTIMATE_PER_SEARCH_USD,
+  generateQueries,
+  type ExaClient,
+} from '@jobforce/search';
+import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
+import { auditEvent } from '../audit.js';
+import { requireCsrf, requireSession } from '../auth.js';
+import { validateBody } from '../validation.js';
+
+// ---------------------------------------------------------------------------
+// Dependencias inyectables (solo tests).
+// ---------------------------------------------------------------------------
+
+interface CampaignTestDeps {
+  createExaClient?: (apiKey: string) => ExaClient;
+  evaluateOffer?: typeof evaluateOffer;
+}
+
+let testDeps: CampaignTestDeps = {};
+
+/**
+ * Solo para tests: sustituye el cliente de Exa y/o el evaluador por dobles.
+ * En producción siempre se usan las implementaciones reales.
+ */
+export function setCampaignTestDeps(deps: CampaignTestDeps): void {
+  testDeps = deps;
+}
+
+/** Restaura las dependencias reales tras un test con dobles. */
+export function resetCampaignTestDeps(): void {
+  testDeps = {};
+}
+
+const exaClientFactory = (): ((apiKey: string) => ExaClient) =>
+  testDeps.createExaClient ?? createExaClient;
+const evaluateOfferFn = (): typeof evaluateOffer => testDeps.evaluateOffer ?? evaluateOffer;
+
+// ---------------------------------------------------------------------------
+// Esquemas zod.
+// ---------------------------------------------------------------------------
+
+// Los ids de campaña/oferta son UUID v4; un id malformado nunca puede existir
+// en BD, así que se rechaza con 400 antes de tocar la base de datos.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const CampaignStatusSchema = z.enum(['draft', 'active', 'archived']);
+
+const MandatoryRequirementSchema: z.ZodType<MandatoryRequirement> = z.object({
+  id: z.string().min(1).max(100),
+  kind: z.enum(['role', 'language', 'location', 'seniority', 'keyword']),
+  description: z.string().min(1).max(1000),
+  params: z.record(z.string(), z.unknown()),
+});
+
+const PreferenceDimSchema: z.ZodType<PreferenceDim> = z.object({
+  weight: z.number().min(0).max(100),
+  description: z.string().min(1).max(1000),
+  keywords: z.array(z.string().min(1).max(200)),
+});
+
+const PreferenceKeySchema = z.enum([
+  'funciones',
+  'competencias',
+  'seniority',
+  'ubicacion',
+  'condiciones',
+  'empresa',
+]) satisfies z.ZodType<PreferenceKey>;
+
+const CampaignCriteriaSchema: z.ZodType<CampaignCriteria> = z.object({
+  roles: z.array(z.string().min(1).max(200)).min(1, 'se necesita al menos un rol'),
+  mandatory: z.array(MandatoryRequirementSchema),
+  preferences: z.record(PreferenceKeySchema, PreferenceDimSchema),
+  queries: z.array(z.string().min(1).max(500)),
+  unknown_policy: z.literal('conservative'),
+});
+
+const CreateCampaignBody = z.object({
+  name: z.string().trim().min(1, 'el nombre es obligatorio').max(120),
+  criteria: CampaignCriteriaSchema.optional(),
+  exa_budget_cap_usd: z
+    .number()
+    .positive('el límite de presupuesto debe ser mayor que 0')
+    .max(100, 'el límite de presupuesto no puede superar 100 $')
+    .optional(),
+});
+
+const UpdateCampaignBody = z.object({
+  name: z.string().trim().min(1, 'el nombre no puede estar vacío').max(120).optional(),
+  criteria: CampaignCriteriaSchema.optional(),
+  exa_budget_cap_usd: z
+    .number()
+    .positive('el límite de presupuesto debe ser mayor que 0')
+    .max(100, 'el límite de presupuesto no puede superar 100 $')
+    .optional(),
+  status: CampaignStatusSchema.optional(),
+});
+
+const LaunchSearchBody = z.object({
+  queries: z
+    .array(z.string().trim().min(1, 'la consulta no puede estar vacía').max(500))
+    .max(5, 'máximo 5 consultas por lanzamiento')
+    .optional(),
+  num_results: z.number().int().min(1).max(10).default(5),
+});
+
+const authOnly = { preHandler: [requireSession] };
+const mutating = { preHandler: [requireSession, requireCsrf] };
+
+// ---------------------------------------------------------------------------
+// Filas de BD y mapeos.
+// ---------------------------------------------------------------------------
+
+interface CampaignRow {
+  id: string;
+  name: string;
+  criteria: CampaignCriteria;
+  exa_budget_cap_usd: string;
+  exa_spent_usd: string;
+  status: string;
+  created_at: Date;
+  updated_at: Date;
+  searches_count?: string;
+  offers_count?: string;
+}
+
+interface SearchRow {
+  id: string;
+  campaign_id: string;
+  query: string;
+  num_results: number;
+  status: string;
+  exa_request_id: string | null;
+  cost_usd: string;
+  results_count: number;
+  duplicates_count: number;
+  error: string | null;
+  started_at: Date | null;
+  finished_at: Date;
+}
+
+interface OfferRow {
+  id: string;
+  campaign_id: string;
+  search_id: string | null;
+  canonical_url: string;
+  url: string;
+  title: string | null;
+  company: string | null;
+  published_date: string | null;
+  retrieved_at: Date;
+  highlights: unknown;
+  raw: unknown;
+  mandatory_verdict: string | null;
+  score: string | null;
+  breakdown: unknown;
+  mandatory_details?: unknown;
+}
+
+function toIso(d: Date): string {
+  return new Date(d).toISOString();
+}
+
+function mapCampaign(row: CampaignRow): Campaign {
+  const campaign: Campaign = {
+    id: row.id,
+    name: row.name,
+    criteria: row.criteria,
+    exa_budget_cap_usd: Number(row.exa_budget_cap_usd),
+    exa_spent_usd: Number(row.exa_spent_usd),
+    status: row.status as Campaign['status'],
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  };
+  if (row.searches_count !== undefined) campaign.searches_count = Number(row.searches_count);
+  if (row.offers_count !== undefined) campaign.offers_count = Number(row.offers_count);
+  return campaign;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}
+
+/** Hechos del perfil de la versión ACTIVA (vacío si no hay versión activa). */
+async function loadActiveProfileFacts(): Promise<{
+  facts: ProfileFactInput[];
+  versionId: string | null;
+}> {
+  const versions = await query<{ id: string }>(
+    `SELECT id FROM profile_versions WHERE status = 'active' ORDER BY version_no DESC LIMIT 1`,
+  );
+  if (versions.length === 0) return { facts: [], versionId: null };
+  const versionId = versions[0].id;
+  const facts = await query<{ category: string; key: string; value: unknown }>(
+    `SELECT category, key, value FROM profile_facts WHERE profile_version_id = $1`,
+    [versionId],
+  );
+  return {
+    facts: facts.map((f) => ({ category: f.category, key: f.key, value: f.value })),
+    versionId,
+  };
+}
+
+async function getCampaignOr404(id: string): Promise<CampaignRow | null> {
+  const rows = await query<CampaignRow>(
+    `SELECT id, name, criteria, exa_budget_cap_usd, exa_spent_usd, status,
+            created_at, updated_at
+       FROM campaigns WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+function checkCampaignId(id: unknown): id is string {
+  return typeof id === 'string' && UUID_RE.test(id);
+}
+
+// ---------------------------------------------------------------------------
+// Rutas.
+// ---------------------------------------------------------------------------
+
+export async function registerCampaignRoutes(
+  app: FastifyInstance,
+  config: AppConfig,
+): Promise<void> {
+  // GET /api/campaigns — lista con contadores de búsquedas y ofertas.
+  app.get('/api/campaigns', authOnly, async () => {
+    const rows = await query<CampaignRow>(
+      `SELECT c.id, c.name, c.criteria, c.exa_budget_cap_usd, c.exa_spent_usd,
+              c.status, c.created_at, c.updated_at,
+              (SELECT COUNT(*) FROM searches s WHERE s.campaign_id = c.id) AS searches_count,
+              (SELECT COUNT(*) FROM offers o WHERE o.campaign_id = c.id) AS offers_count
+         FROM campaigns c ORDER BY c.created_at DESC`,
+    );
+    return { campaigns: rows.map(mapCampaign) };
+  });
+
+  // POST /api/campaigns — crea una campaña (criterios por defecto si no se dan).
+  app.post('/api/campaigns', mutating, async (req, reply) => {
+    const valid = validateBody(CreateCampaignBody, req.body, reply);
+    if (!valid) return;
+    const criteria = valid.data.criteria ?? defaultCriteria();
+    const rows = await query<{ id: string; name: string; exa_budget_cap_usd: string }>(
+      `INSERT INTO campaigns (name, criteria, exa_budget_cap_usd, created_by)
+       VALUES ($1, $2::jsonb, COALESCE($3::numeric, 3.0000), $4)
+       RETURNING id, name, exa_budget_cap_usd`,
+      [
+        valid.data.name,
+        JSON.stringify(criteria),
+        valid.data.exa_budget_cap_usd ?? null,
+        req.authSession?.userId ?? null,
+      ],
+    );
+    const created = rows[0];
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'campaign_created',
+      entityType: 'campaign',
+      entityId: created.id,
+      details: { name: created.name, exa_budget_cap_usd: Number(created.exa_budget_cap_usd) },
+    });
+    return reply.code(201).send({ id: created.id, name: created.name });
+  });
+
+  // GET /api/campaigns/:id — detalle.
+  app.get('/api/campaigns/:id', authOnly, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const campaign = await getCampaignOr404(id);
+    if (!campaign) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    return { campaign: mapCampaign(campaign) };
+  });
+
+  // PUT /api/campaigns/:id — actualización parcial.
+  app.put('/api/campaigns/:id', mutating, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const valid = validateBody(UpdateCampaignBody, req.body ?? {}, reply);
+    if (!valid) return;
+
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const changed: string[] = [];
+    if (valid.data.name !== undefined) {
+      params.push(valid.data.name);
+      sets.push(`name = $${params.length}`);
+      changed.push('name');
+    }
+    if (valid.data.criteria !== undefined) {
+      params.push(JSON.stringify(valid.data.criteria));
+      sets.push(`criteria = $${params.length}::jsonb`);
+      changed.push('criteria');
+    }
+    if (valid.data.exa_budget_cap_usd !== undefined) {
+      params.push(valid.data.exa_budget_cap_usd);
+      sets.push(`exa_budget_cap_usd = $${params.length}`);
+      changed.push('exa_budget_cap_usd');
+    }
+    if (valid.data.status !== undefined) {
+      params.push(valid.data.status);
+      sets.push(`status = $${params.length}`);
+      changed.push('status');
+    }
+    if (sets.length === 0) {
+      return reply.code(400).send({ error: 'datos_invalidos', detalles: ['cuerpo: sin cambios'] });
+    }
+    sets.push('updated_at = now()');
+    params.push(id);
+    const updated = await query<{ id: string }>(
+      `UPDATE campaigns SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id`,
+      params,
+    );
+    if (updated.length === 0) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'campaign_updated',
+      entityType: 'campaign',
+      entityId: id,
+      details: { cambios: changed },
+    });
+    return reply.send({ ok: true });
+  });
+
+  // POST /api/campaigns/:id/search — lanza búsquedas en Exa con control de presupuesto.
+  app.post('/api/campaigns/:id/search', mutating, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const valid = validateBody(LaunchSearchBody, req.body ?? {}, reply);
+    if (!valid) return;
+
+    const campaignRow = await getCampaignOr404(id);
+    if (!campaignRow) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    const criteria = campaignRow.criteria as CampaignCriteria;
+
+    // 2) Consultas: las del cuerpo o las generadas desde los criterios (máx 5).
+    const bodyQueries = (valid.data.queries ?? []).slice(0, 5);
+    const resolvedQueries =
+      bodyQueries.length > 0 ? bodyQueries : generateQueries(criteria).slice(0, 5);
+    if (resolvedQueries.length === 0) {
+      return reply.code(400).send({ error: 'sin_consultas' });
+    }
+    const numResults = valid.data.num_results;
+
+    // 3) Presupuesto: estimación conservadora ANTES de tocar Exa.
+    const spent = Number(campaignRow.exa_spent_usd);
+    const cap = Number(campaignRow.exa_budget_cap_usd);
+    const estimate = resolvedQueries.length * EXA_COST_ESTIMATE_PER_SEARCH_USD;
+    if (spent + estimate > cap) {
+      return reply
+        .code(409)
+        .send({ error: 'presupuesto_exa_agotado', gastado: spent, limite: cap });
+    }
+
+    // 4) Clave de Exa configurada. El valor nunca se loguea.
+    const apiKey = config.exaApiKey;
+    if (!apiKey) {
+      return reply.code(503).send({ error: 'exa_no_configurado' });
+    }
+
+    const client = exaClientFactory()(apiKey);
+    const evaluate = evaluateOfferFn();
+    const { facts: profileFacts, versionId: profileVersionId } = await loadActiveProfileFacts();
+
+    const summaries: Array<{
+      id: string;
+      query: string;
+      results_count: number;
+      duplicates_count: number;
+      cost_usd: number;
+      error?: string;
+    }> = [];
+    let totalCost = 0;
+
+    // 5) Una búsqueda por consulta; los fallos no tumban el resto.
+    for (const searchQuery of resolvedQueries) {
+      const inserted = await query<{ id: string }>(
+        `INSERT INTO searches (campaign_id, query, num_results, status, started_at)
+         VALUES ($1, $2, $3, 'running', now()) RETURNING id`,
+        [id, searchQuery, numResults],
+      );
+      const searchId = inserted[0].id;
+      try {
+        const resp = await client.search({ query: searchQuery, numResults });
+        const cost = Number(resp.costDollars ?? 0);
+
+        let insertedCount = 0;
+        const newOffers: Array<{ id: string; title: string; url: string; highlights: string[] }> = [];
+        for (const result of resp.results) {
+          const canon = canonicalUrl(result.url);
+          const rows = await query<{ id: string; title: string | null; url: string; highlights: unknown }>(
+            `INSERT INTO offers
+               (campaign_id, search_id, canonical_url, url, title, company,
+                published_date, highlights, raw)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::jsonb, $9::jsonb)
+             ON CONFLICT (campaign_id, canonical_url) DO NOTHING
+             RETURNING id, title, url, highlights`,
+            [
+              id,
+              searchId,
+              canon,
+              result.url,
+              result.title ?? null,
+              result.author ?? null,
+              result.publishedDate ?? null,
+              JSON.stringify(result.highlights ?? []),
+              JSON.stringify(result),
+            ],
+          );
+          if (rows.length > 0) {
+            insertedCount += 1;
+            const row = rows[0];
+            newOffers.push({
+              id: row.id,
+              title: row.title ?? '',
+              url: row.url,
+              highlights: asStringArray(row.highlights),
+            });
+          }
+        }
+        const duplicatesCount = resp.results.length - insertedCount;
+
+        for (const offer of newOffers) {
+          const ev = evaluate(
+            { title: offer.title, url: offer.url, highlights: offer.highlights },
+            criteria,
+            profileFacts,
+          );
+          await query(
+            `INSERT INTO evaluations
+               (offer_id, campaign_id, profile_version_id, mandatory_verdict,
+                mandatory_details, score, breakdown)
+             VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
+             ON CONFLICT (offer_id, campaign_id) DO NOTHING`,
+            [
+              offer.id,
+              id,
+              profileVersionId,
+              ev.mandatory_verdict,
+              JSON.stringify(ev.mandatory_details),
+              ev.score,
+              JSON.stringify(ev.breakdown),
+            ],
+          );
+        }
+
+        await query(
+          `UPDATE searches
+              SET status = 'done', exa_request_id = $2, cost_usd = $3,
+                  results_count = $4, duplicates_count = $5, finished_at = now()
+            WHERE id = $1`,
+          [searchId, resp.requestId ?? null, cost, resp.results.length, duplicatesCount],
+        );
+        await query(
+          `UPDATE campaigns SET exa_spent_usd = exa_spent_usd + $2, updated_at = now() WHERE id = $1`,
+          [id, cost],
+        );
+        totalCost += cost;
+        summaries.push({
+          id: searchId,
+          query: searchQuery,
+          results_count: resp.results.length,
+          duplicates_count: duplicatesCount,
+          cost_usd: cost,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'error desconocido';
+        await query(`UPDATE searches SET status = 'error', error = $2, finished_at = now() WHERE id = $1`, [
+          searchId,
+          message,
+        ]);
+        summaries.push({
+          id: searchId,
+          query: searchQuery,
+          results_count: 0,
+          duplicates_count: 0,
+          cost_usd: 0,
+          error: message,
+        });
+      }
+    }
+
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'search_launched',
+      entityType: 'campaign',
+      entityId: id,
+      details: { queries: resolvedQueries, total_cost_usd: totalCost },
+    });
+    return reply.send({ searches: summaries, total_cost_usd: totalCost });
+  });
+
+  // GET /api/campaigns/:id/offers — ofertas con su evaluación (si existe).
+  app.get('/api/campaigns/:id/offers', authOnly, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const campaign = await getCampaignOr404(id);
+    if (!campaign) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    const rows = await query<OfferRow>(
+      `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
+              o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
+              e.mandatory_verdict, e.score, e.breakdown
+         FROM offers o
+         LEFT JOIN evaluations e
+           ON e.offer_id = o.id AND e.campaign_id = o.campaign_id
+        WHERE o.campaign_id = $1
+        ORDER BY o.retrieved_at DESC`,
+      [id],
+    );
+    return {
+      offers: rows.map((o) => ({
+        id: o.id,
+        title: o.title,
+        company: o.company,
+        url: o.url,
+        canonical_url: o.canonical_url,
+        published_date: o.published_date,
+        retrieved_at: toIso(o.retrieved_at),
+        evaluation:
+          o.mandatory_verdict === null
+            ? null
+            : {
+                mandatory_verdict: o.mandatory_verdict,
+                score: o.score === null ? null : Number(o.score),
+                breakdown: o.breakdown,
+              },
+      })),
+    };
+  });
+
+  // GET /api/campaigns/:id/offers/:offerId — detalle de una oferta.
+  app.get('/api/campaigns/:id/offers/:offerId', authOnly, async (req, reply) => {
+    const { id, offerId } = req.params as { id: string; offerId: string };
+    if (!checkCampaignId(id) || !checkCampaignId(offerId)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const rows = await query<OfferRow>(
+      `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
+              o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
+              e.mandatory_verdict, e.score, e.breakdown, e.mandatory_details
+         FROM offers o
+         LEFT JOIN evaluations e
+           ON e.offer_id = o.id AND e.campaign_id = o.campaign_id
+        WHERE o.id = $1 AND o.campaign_id = $2`,
+      [offerId, id],
+    );
+    const offer = rows[0];
+    if (!offer) {
+      return reply.code(404).send({ error: 'oferta_no_encontrada' });
+    }
+    return {
+      offer: {
+        id: offer.id,
+        title: offer.title,
+        company: offer.company,
+        url: offer.url,
+        canonical_url: offer.canonical_url,
+        published_date: offer.published_date,
+        retrieved_at: toIso(offer.retrieved_at),
+        highlights: offer.highlights,
+      },
+      evaluation:
+        offer.mandatory_verdict === null
+          ? null
+          : {
+              mandatory_verdict: offer.mandatory_verdict,
+              mandatory_details: offer.mandatory_details,
+              score: offer.score === null ? null : Number(offer.score),
+              breakdown: offer.breakdown,
+            },
+    };
+  });
+
+  // POST /api/campaigns/:id/evaluate — re-evalúa todas las ofertas de la campaña.
+  app.post('/api/campaigns/:id/evaluate', mutating, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const campaign = await getCampaignOr404(id);
+    if (!campaign) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    const criteria = campaign.criteria as CampaignCriteria;
+    const evaluate = evaluateOfferFn();
+    const { facts: profileFacts, versionId: profileVersionId } = await loadActiveProfileFacts();
+
+    const offers = await query<{ id: string; title: string | null; url: string; highlights: unknown }>(
+      `SELECT id, title, url, highlights FROM offers WHERE campaign_id = $1`,
+      [id],
+    );
+    for (const offer of offers) {
+      const ev = evaluate(
+        {
+          title: offer.title ?? '',
+          url: offer.url,
+          highlights: asStringArray(offer.highlights),
+        },
+        criteria,
+        profileFacts,
+      );
+      await query(
+        `INSERT INTO evaluations
+           (offer_id, campaign_id, profile_version_id, mandatory_verdict,
+            mandatory_details, score, breakdown)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
+         ON CONFLICT (offer_id, campaign_id) DO UPDATE SET
+           profile_version_id = EXCLUDED.profile_version_id,
+           mandatory_verdict = EXCLUDED.mandatory_verdict,
+           mandatory_details = EXCLUDED.mandatory_details,
+           score = EXCLUDED.score,
+           breakdown = EXCLUDED.breakdown,
+           created_at = now()`,
+        [
+          offer.id,
+          id,
+          profileVersionId,
+          ev.mandatory_verdict,
+          JSON.stringify(ev.mandatory_details),
+          ev.score,
+          JSON.stringify(ev.breakdown),
+        ],
+      );
+    }
+    return reply.send({ evaluated: offers.length });
+  });
+
+  // GET /api/campaigns/:id/report — genera, guarda y devuelve el informe.
+  app.get('/api/campaigns/:id/report', authOnly, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const campaignRow = await getCampaignOr404(id);
+    if (!campaignRow) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+
+    const searches = await query<SearchRow>(
+      `SELECT id, campaign_id, query, num_results, status, exa_request_id, cost_usd,
+              results_count, duplicates_count, error, started_at, finished_at
+         FROM searches WHERE campaign_id = $1 ORDER BY finished_at ASC`,
+      [id],
+    );
+    const offers = await query<OfferRow>(
+      `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
+              o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
+              e.mandatory_verdict, e.score, e.breakdown, e.mandatory_details
+         FROM offers o
+         LEFT JOIN evaluations e
+           ON e.offer_id = o.id AND e.campaign_id = o.campaign_id
+        WHERE o.campaign_id = $1
+        ORDER BY o.retrieved_at DESC`,
+      [id],
+    );
+
+    // Fuentes intentadas: dominios distintos de las ofertas leídas.
+    const hosts = new Set<string>();
+    for (const offer of offers) {
+      try {
+        hosts.add(new URL(offer.canonical_url).hostname);
+      } catch {
+        // URL no parseable: no es una fuente identificable.
+      }
+    }
+    const erroredSearches = searches.filter((s) => s.status === 'error');
+    // Si alguna búsqueda falló, la fuente inaccesible es la propia API de Exa.
+    const fuentesInaccesibles = erroredSearches.length > 0 ? ['api.exa.ai'] : [];
+
+    const cumple = offers.filter((o) => o.mandatory_verdict === 'cumple');
+    const descartadas = offers.filter((o) => o.mandatory_verdict !== 'cumple');
+
+    const descartes = descartadas.map((o) => {
+      const details = Array.isArray(o.mandatory_details)
+        ? (o.mandatory_details as Array<{
+            requisito_id: string;
+            descripcion: string;
+            estado: string;
+            evidencia: string;
+          }>)
+        : [];
+      const fallidos = details.filter((d) => d.estado === 'incumple');
+      const sinEvidencia = details.filter((d) => d.estado === 'sin_evidencia');
+      let motivo: string;
+      if (fallidos.length > 0) {
+        motivo = `no cumple: ${fallidos.map((d) => d.descripcion).join('; ')}`;
+      } else if (sinEvidencia.length > 0) {
+        motivo = `sin evidencia de: ${sinEvidencia.map((d) => d.requisito_id).join(', ')}`;
+      } else if (o.mandatory_verdict === null) {
+        motivo = 'pendiente de evaluación';
+      } else {
+        motivo = `veredicto: ${o.mandatory_verdict}`;
+      }
+      const evidencia =
+        details.map((d) => d.evidencia).find((e) => e && e.length > 0) ?? '';
+      return { titulo: o.title ?? '', motivo, evidencia };
+    });
+
+    const report = {
+      campana: { id: campaignRow.id, nombre: campaignRow.name, estado: campaignRow.status },
+      generado_en: new Date().toISOString(),
+      busquedas: searches.map((s) => ({
+        query: s.query,
+        estado: s.status,
+        resultados: s.results_count,
+        duplicados: s.duplicates_count,
+        coste_usd: Number(s.cost_usd),
+        ...(s.error ? { error: s.error } : {}),
+      })),
+      fuentes_intentadas: [...hosts].sort(),
+      fuentes_inaccesibles: fuentesInaccesibles,
+      vacantes_leidas: offers.length,
+      duplicados_descartados: searches.reduce((acc, s) => acc + s.duplicates_count, 0),
+      ofertas: cumple.map((o) => ({
+        titulo: o.title ?? '',
+        empresa: o.company ?? '',
+        url: o.url,
+        veredicto: o.mandatory_verdict,
+        puntuacion: o.score === null ? null : Number(o.score),
+      })),
+      descartes,
+      nuevas_coincidencias: cumple.length,
+      gasto_total_usd: Number(campaignRow.exa_spent_usd),
+      presupuesto_usd: Number(campaignRow.exa_budget_cap_usd),
+    };
+
+    await query(`INSERT INTO campaign_reports (campaign_id, report) VALUES ($1, $2::jsonb)`, [
+      id,
+      JSON.stringify(report),
+    ]);
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'report_generated',
+      entityType: 'campaign',
+      entityId: id,
+      details: { ofertas: cumple.length, descartes: descartes.length },
+    });
+    return reply.send({ report });
+  });
+}

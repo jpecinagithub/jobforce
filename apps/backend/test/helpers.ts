@@ -41,7 +41,8 @@ export async function buildTestApp(
 export async function resetDb(): Promise<void> {
   await query(
     `TRUNCATE admin_users, user_sessions, profile_versions, profile_facts,
-              answer_memory, configuration_versions, audit_events
+              answer_memory, configuration_versions, audit_events,
+              campaigns, searches, offers, evaluations, campaign_reports
      RESTART IDENTITY CASCADE`,
   );
 }
