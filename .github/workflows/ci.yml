@@ -1,0 +1,63 @@
+# JOBFORCE — integración continua (GitHub Actions)
+#
+# Qué hace (en cada push a main y en cada pull request):
+#   1. Instala con pnpm (versión fijada en package.json → packageManager) vía corepack.
+#   2. Typecheck completo: compila todos los paquetes y pasa `tsc --noEmit` en cada uno
+#      (`pnpm typecheck` en la raíz = build + typecheck de todos los workspace).
+#   3. Tests: ejecuta `pnpm -r --if-present test`.
+#      - Los tests del backend (`@jobforce/backend`) necesitan PostgreSQL real:
+#        se levanta un servicio postgres:16-alpine (la misma imagen que compose)
+#        y se expone DATABASE_URL solo para el paso de tests.
+#      - Los tests de paquetes (autonomy, connectors, eval, search) no necesitan red ni claves.
+#
+# Node 22: es el motor declarado en package.json (engines) y el que corre en Oracle.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    name: typecheck + tests + build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jobforce
+          POSTGRES_PASSWORD: jobforce
+          POSTGRES_DB: jobforce_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready -U jobforce
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Activar pnpm vía corepack
+        run: corepack enable
+
+      - name: Install (lockfile congelado)
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Typecheck (build + tsc --noEmit en todos los paquetes)
+        run: corepack pnpm typecheck
+
+      - name: Tests
+        env:
+          DATABASE_URL: <redacted>
+        run: corepack pnpm -r --if-present test
