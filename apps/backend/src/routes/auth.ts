@@ -44,11 +44,16 @@ interface AdminRow {
 }
 
 function cookieOptions(config: AppConfig) {
+  // Fase 5: el panel vive en Vercel (origen distinto al backend), así que la
+  // cookie de sesión debe viajar cross-site: SameSite=None. Esto EXIGE
+  // Secure (HTTPS); en desarrollo local sin HTTPS se mantiene Lax.
+  const crossSite = config.sessionCookieSecure;
+  const sameSite: 'none' | 'lax' = crossSite ? 'none' : 'lax';
   return {
     path: '/',
     httpOnly: true,
     secure: config.sessionCookieSecure,
-    sameSite: 'lax' as const,
+    sameSite,
     maxAge: Math.floor(config.sessionTtlHours * 3600),
   };
 }
@@ -180,7 +185,7 @@ export async function registerAuthRoutes(app: FastifyInstance, config: AppConfig
         entityType: 'user_session',
         entityId: req.authSession?.id ?? null,
       });
-      reply.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+      reply.clearCookie(SESSION_COOKIE_NAME, cookieOptions(config));
       return reply.send({ ok: true });
     },
   );

@@ -47,6 +47,46 @@ const RawConfigSchema = z.object({
   // base en ms.
   BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().min(1).default(5),
   BREAKER_BASE_BACKOFF_MS: z.coerce.number().int().min(1000).default(5 * 60 * 1000),
+  // Cifrado de secretos en reposo (Fase 5, Gmail OAuth). Clave de 32 bytes en
+  // base64 o hexadecimal. Opcional al arrancar: solo se exige cuando se
+  // guarda o se lee un secreto (p. ej. el refresh_token de Gmail). El valor
+  // nunca se incluye en logs ni en respuestas.
+  SECRETS_ENCRYPTION_KEY: z
+    .string()
+    .trim()
+    .transform((v) => (v === '' ? undefined : v))
+    .optional(),
+  // OAuth de Google (Fase 5). Opcionales: el panel puede guardar las
+  // credenciales cifradas en `protected_settings`, que tienen prioridad
+  // sobre estas variables. GOOGLE_REDIRECT_URI tiene un valor por defecto
+  // igual a la URI pública definitiva del despliegue Oracle.
+  GOOGLE_CLIENT_ID: z
+    .string()
+    .trim()
+    .transform((v) => (v === '' ? undefined : v))
+    .optional(),
+  GOOGLE_CLIENT_SECRET: z
+    .string()
+    .trim()
+    .transform((v) => (v === '' ? undefined : v))
+    .optional(),
+  GOOGLE_REDIRECT_URI: z
+    .string()
+    .trim()
+    .default('https://jpecina.duckdns.org/jobforce/api/integraciones/gmail/callback'),
+  // Endpoints de Google (inyectables en tests; en producción, los reales).
+  GOOGLE_AUTH_URL: z
+    .string()
+    .trim()
+    .default('https://accounts.google.com/o/oauth2/v2/auth'),
+  GOOGLE_TOKEN_URL: z
+    .string()
+    .trim()
+    .default('https://oauth2.googleapis.com/token'),
+  GOOGLE_USERINFO_URL: z
+    .string()
+    .trim()
+    .default('https://www.googleapis.com/oauth2/v2/userinfo'),
 });
 
 const ConfigSchema = RawConfigSchema.transform((raw) => ({
@@ -68,6 +108,18 @@ const ConfigSchema = RawConfigSchema.transform((raw) => ({
   costMonthlyBudgetUsd: raw.COST_MONTHLY_BUDGET_USD ?? null,
   breakerFailureThreshold: raw.BREAKER_FAILURE_THRESHOLD,
   breakerBaseBackoffMs: raw.BREAKER_BASE_BACKOFF_MS,
+  // null cuando SECRETS_ENCRYPTION_KEY no está definida: el guardado y la
+  // lectura de secretos responden 503 hasta que se configure. El valor
+  // nunca se incluye en logs ni en respuestas.
+  secretsEncryptionKey: raw.SECRETS_ENCRYPTION_KEY ?? null,
+  // Credenciales OAuth de Google (null = no definidas en el entorno; el
+  // panel puede aportarlas cifradas desde `protected_settings`).
+  googleClientId: raw.GOOGLE_CLIENT_ID ?? null,
+  googleClientSecret: raw.GOOGLE_CLIENT_SECRET ?? null,
+  googleRedirectUri: raw.GOOGLE_REDIRECT_URI,
+  googleAuthUrl: raw.GOOGLE_AUTH_URL,
+  googleTokenUrl: raw.GOOGLE_TOKEN_URL,
+  googleUserinfoUrl: raw.GOOGLE_USERINFO_URL,
 }));
 
 export type AppConfig = z.output<typeof ConfigSchema>;

@@ -50,9 +50,11 @@ export default async function HomePage() {
         <div className="card">
           <div className="label">Integraciones</div>
           <div className="big">
-            <span className="badge pending">pendiente</span>
+            <span className="badge pending">configurable</span>
           </div>
-          <span className="muted">Gmail y demás integraciones aún no están conectadas.</span>
+          <span className="muted">Conecta Gmail con OAuth desde la configuración.</span>
+          <br />
+          <Link href="/configuracion">Configurar Gmail</Link>
         </div>
       </div>
 

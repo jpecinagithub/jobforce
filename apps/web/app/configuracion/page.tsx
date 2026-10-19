@@ -1,4 +1,5 @@
 import { apiGet } from '@/lib/api';
+import GoogleOAuthSection from '@/components/GoogleOAuthSection';
 import type { ConfigurationVersion } from '@jobforce/domain';
 
 export const dynamic = 'force-dynamic';
@@ -25,6 +26,8 @@ export default async function ConfiguracionPage() {
           <pre className="json">{JSON.stringify(config.data.config, null, 2)}</pre>
         </>
       )}
+
+      <GoogleOAuthSection />
     </>
   );
 }
