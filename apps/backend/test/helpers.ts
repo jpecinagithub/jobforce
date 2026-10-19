@@ -48,7 +48,8 @@ export async function resetDb(): Promise<void> {
               portal_accounts, application_outcomes,
               cost_events, connector_breakers,
               gmail_oauth_states, gmail_tokens, protected_settings,
-              code_changes, deployments
+              code_changes, deployments,
+              etiquetas_ofertas, etiquetas_correos
      RESTART IDENTITY CASCADE`,
   );
   // La migración 006 siembra los presupuestos; los tests parten de valores
