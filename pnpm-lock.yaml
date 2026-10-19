@@ -29,6 +29,9 @@ importers:
       '@jobforce/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@jobforce/costs':
+        specifier: workspace:*
+        version: link:../../packages/costs
       '@jobforce/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -120,6 +123,16 @@ importers:
       '@types/node':
         specifier: 22.20.5
         version: 22.20.5
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  packages/costs:
+    dependencies:
+      '@jobforce/database':
+        specifier: workspace:*
+        version: link:../database
+    devDependencies:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
