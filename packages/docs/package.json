@@ -1,0 +1,22 @@
+{
+  "dependencies": {
+    "docx": "^9.1.1",
+    "jszip": "^3.10.1",
+    "playwright-core": "^1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  },
+  "main": "./dist/index.js",
+  "name": "@jobforce/docs",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm --filter @jobforce/domain build && pnpm run build && tsc -p tsconfig.test.json && node --test './.test-dist/test/*.test.js'",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "version": "0.1.0"
+}
