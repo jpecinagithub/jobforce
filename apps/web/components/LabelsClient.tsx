@@ -273,6 +273,14 @@ export default function LabelsClient() {
                       <strong>{o.company ?? '—'}</strong>
                       <br />
                       <span className="muted">{o.title ?? '—'}</span>
+                      {o.url && (
+                        <>
+                          <br />
+                          <a href={o.url} target="_blank" rel="noopener noreferrer">
+                            Ver oferta ↗
+                          </a>
+                        </>
+                      )}
                     </td>
                     <td>{o.score ?? '—'}</td>
                     <td>

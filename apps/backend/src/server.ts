@@ -29,6 +29,27 @@ import { registerLabelRoutes } from './routes/labels.js';
 export function buildServer(config: AppConfig): FastifyInstance {
   const app = Fastify({ logger: config.nodeEnv !== 'test' });
 
+  // El frontal envía `Content-Type: application/json` en TODAS las mutaciones,
+  // también en los POST sin cuerpo (activar versión, aprobar, parada global…).
+  // El parser JSON por defecto de Fastify responde 400 FST_ERR_CTP_EMPTY_JSON_BODY
+  // ante un cuerpo vacío; este parser tolera el cuerpo vacío como `undefined`
+  // (igual que una petición sin Content-Type) en lugar de reventar.
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    const text = typeof body === 'string' ? body : (body?.toString() ?? '');
+    if (text === '') {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(text));
+    } catch (err) {
+      // Como el parser por defecto: JSON inválido → 400 (no 500).
+      const e = err as Error & { statusCode?: number };
+      e.statusCode = 400;
+      done(e);
+    }
+  });
+
   app.register(helmet);
   app.register(cookie);
   // Rate limit desactivado por defecto: cada ruta opta con `config.rateLimit`.

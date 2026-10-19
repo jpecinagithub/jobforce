@@ -51,6 +51,63 @@ export interface PolicyResponse {
   esBorrador?: boolean;
 }
 
+/**
+ * Fila de política tal como la devuelve de verdad GET /api/autonomy/policy:
+ * `{ borrador, activa }`, donde cada una es la fila de `autonomy_policies`
+ * (con la política completa en `policy` como JSONB).
+ */
+export interface BackendPolicyRow {
+  id: string;
+  version: number;
+  policy: {
+    modoActivo: ModoAutonomia;
+    reglas: ReglasAutonomia;
+    paradaGlobal?: boolean;
+    autorizacionEscrita?: {
+      autorizadoPor: string;
+      autorizadoEn: string;
+      declaracion: string;
+    } | null;
+  };
+  created_at: string;
+  created_by: string | null;
+  authorized_by: string | null;
+  authorized_at: string | null;
+  revoked_at: string | null;
+  global_stop: boolean;
+  notes: string | null;
+}
+
+export interface PolicyEnvelope {
+  borrador: BackendPolicyRow | null;
+  activa: BackendPolicyRow | null;
+}
+
+/**
+ * Adapta la respuesta real del backend (`{ borrador, activa }`) al
+ * `PolicyResponse` que consume el frontal. El borrador manda sobre la activa
+ * para precargar el editor; si no hay ninguna, devuelve null.
+ */
+export function toPolicyResponse(data: PolicyEnvelope | null | undefined): PolicyResponse | null {
+  const src = data?.borrador ?? data?.activa ?? null;
+  if (!src || !src.policy) return null;
+  const p = src.policy;
+  return {
+    version: src.version,
+    modoActivo: p.modoActivo,
+    reglas: p.reglas,
+    paradaGlobal: src.global_stop ?? p.paradaGlobal ?? false,
+    autorizacionEscrita: src.authorized_by
+      ? {
+          autorizadoPor: src.authorized_by,
+          fecha: src.authorized_at ?? '',
+          declaracion: p.autorizacionEscrita?.declaracion ?? '',
+        }
+      : null,
+    esBorrador: data?.borrador != null,
+  };
+}
+
 /** GET /api/interventions */
 export type InterventionKind =
   | 'datos_desconocidos'

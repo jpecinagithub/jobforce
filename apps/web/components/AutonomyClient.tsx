@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth';
 import {
   defaultReglas,
   parseApiError,
+  toPolicyResponse,
   MODE_LABELS,
   MODE_DESCRIPTIONS,
 } from '@/lib/autonomy';
@@ -57,10 +58,11 @@ export default function AutonomyClient() {
       }
       if (!sRes.ok) throw new Error(await parseApiError(sRes));
       if (!pRes.ok) throw new Error(await parseApiError(pRes));
-      const [status, policy] = (await Promise.all([sRes.json(), pRes.json()])) as [
+      const [status, policyRaw] = (await Promise.all([sRes.json(), pRes.json()])) as [
         AutonomyStatus,
-        PolicyResponse,
+        Parameters<typeof toPolicyResponse>[0],
       ];
+      const policy = toPolicyResponse(policyRaw);
       setState({ status, policy, unavailable: false, loading: false });
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'No se pudo conectar con el servidor.');
@@ -82,11 +84,12 @@ export default function AutonomyClient() {
 
   // Cuando el backend devuelve la política vigente, precarga el editor con ella.
   useEffect(() => {
-    if (state.policy) {
-      setModo(state.policy.modoActivo);
-      setReglas(state.policy.reglas);
-      setPortalesRaw(state.policy.reglas.portalesPermitidos.join(', '));
-      setEmpresasRaw(state.policy.reglas.empresasExcluidas.join(', '));
+    const pol = state.policy;
+    if (pol?.reglas) {
+      setModo(pol.modoActivo);
+      setReglas(pol.reglas);
+      setPortalesRaw((pol.reglas.portalesPermitidos ?? []).join(', '));
+      setEmpresasRaw((pol.reglas.empresasExcluidas ?? []).join(', '));
     }
   }, [state.policy]);
 
