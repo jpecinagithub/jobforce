@@ -25,6 +25,13 @@ const RawConfigSchema = z.object({
   // sin tocar el valor estricto de producción.
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
   LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
+  // Clave de Exa (Fase 2, búsqueda de ofertas). Opcional: sin ella, la
+  // búsqueda responde 503 `exa_no_configurado`. Nunca se loguea su valor.
+  EXA_API_KEY: z
+    .string()
+    .trim()
+    .transform((v) => (v === '' ? undefined : v))
+    .optional(),
 });
 
 const ConfigSchema = RawConfigSchema.transform((raw) => ({
@@ -36,6 +43,9 @@ const ConfigSchema = RawConfigSchema.transform((raw) => ({
   sessionTtlHours: raw.SESSION_TTL_HOURS,
   loginRateLimitMax: raw.LOGIN_RATE_LIMIT_MAX,
   loginRateLimitWindowMs: raw.LOGIN_RATE_LIMIT_WINDOW_MS,
+  // null cuando EXA_API_KEY no está definida: la búsqueda queda deshabilitada
+  // (503) hasta que se configure. El valor nunca se incluye en logs ni auditoría.
+  exaApiKey: raw.EXA_API_KEY ?? null,
 }));
 
 export type AppConfig = z.output<typeof ConfigSchema>;
