@@ -1,0 +1,223 @@
+/**
+ * Tests unitarios de @jobforce/eval (sin red, fixtures).
+ * Patrón: node --test sobre la salida de tsconfig.test.json.
+ *
+ * Los hechos de perfil usados son FICTICIOS: nunca se reproducen datos
+ * sensibles reales en los tests.
+ */
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { defaultCriteria } from '@jobforce/domain';
+import { evaluateOffer, norm, type ProfileFactInput } from '../src/index.js';
+
+/** Hechos de perfil ficticios para los tests. */
+const FACTS: ProfileFactInput[] = [
+  { category: 'skills', key: 'erp_systems', value: ['SAP', 'Oracle', 'NetSuite'] },
+  { category: 'languages', key: 'english_level', value: 'advanced' },
+  { category: 'experience', key: 'finance_director', value: 'CFO 2023-2026' },
+];
+
+const DIMENSIONS = ['funciones', 'competencias', 'seniority', 'ubicacion', 'condiciones', 'empresa'];
+
+describe('norm()', () => {
+  it('minúsculas y sin tildes', () => {
+    assert.equal(norm('Contabilidad y Tesorería'), 'contabilidad y tesoreria');
+    assert.equal(norm('ESPAÑA'), 'espana');
+    assert.equal(norm('CFO'), 'cfo');
+  });
+});
+
+describe('evaluateOffer', () => {
+  it('(a) oferta que cumple todo: verdict cumple, score > 0, 6 dimensiones', () => {
+    const res = evaluateOffer(
+      {
+        title: 'CFO — Multinational Group (Remote)',
+        url: 'https://example.com/jobs/cfo-1',
+        highlights: [
+          'We are hiring a CFO to lead the finance function of our multinational group. English is the working language.',
+          'This is a remote position based in Spain. Responsibilities: IFRS reporting, consolidation, treasury and budgeting. Requirements: SAP, Power BI, Excel; senior leadership experience. We offer a competitive salary and a permanent contract.',
+        ],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+
+    assert.equal(res.mandatory_verdict, 'cumple');
+    assert.equal(res.mandatory_details.length, 3);
+    for (const d of res.mandatory_details) {
+      assert.equal(d.estado, 'cumple');
+      assert.ok(d.evidencia.length > 0, `${d.requisito_id} sin evidencia`);
+      assert.ok(d.evidencia.length <= 200, `${d.requisito_id} evidencia >200`);
+    }
+    assert.ok(res.score !== null && res.score > 0, `score=${res.score}`);
+    assert.equal(res.breakdown.length, 6);
+    assert.deepEqual(
+      res.breakdown.map((b) => b.dimension),
+      DIMENSIONS,
+    );
+    for (const b of res.breakdown) {
+      assert.ok(b.puntos >= 0 && b.puntos <= 100);
+      assert.ok(b.explicacion.length > 0);
+    }
+    // funciones: 5+ keywords distintas (accounting? no; ifrs, reporting,
+    // consolidation, treasury, budget) → 100
+    const funciones = res.breakdown.find((b) => b.dimension === 'funciones');
+    assert.equal(funciones?.puntos, 100);
+    // competencias referencia el hecho ficticio skills.erp_systems (token "erp")
+    const competencias = res.breakdown.find((b) => b.dimension === 'competencias');
+    assert.ok(competencias?.hechos.includes('skills.erp_systems'));
+  });
+
+  it('(b) rol incompatible (Junior Accountant) → incumple, score null', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Junior Accountant',
+        url: 'https://example.com/jobs/junior-2',
+        highlights: ['Entry-level accounting position with training and growth.'],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+
+    assert.equal(res.mandatory_verdict, 'incumple');
+    assert.equal(res.score, null);
+    const rol = res.mandatory_details.find((d) => d.requisito_id === 'rol');
+    assert.equal(rol?.estado, 'incumple');
+    assert.ok(rol && rol.evidencia.length > 0 && rol.evidencia.length <= 200);
+    // sin veredicto favorable el desglose queda a 0
+    for (const b of res.breakdown) assert.equal(b.puntos, 0);
+  });
+
+  it('(c) sin datos de idioma → sin_evidencia en ese requisito, score null', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Finance Manager',
+        url: 'https://example.com/jobs/fm-3',
+        highlights: ['Finance Manager role with a growing industrial company. Senior position, office in Madrid.'],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+
+    const rol = res.mandatory_details.find((d) => d.requisito_id === 'rol');
+    assert.equal(rol?.estado, 'cumple');
+    const ingles = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ingles?.estado, 'sin_evidencia');
+    assert.equal(ingles?.evidencia, '');
+    assert.equal(res.mandatory_verdict, 'sin_evidencia');
+    assert.equal(res.score, null);
+  });
+
+  it('(d) el scoring pondera por densidad de keywords', () => {
+    const base = {
+      title: 'Finance Manager',
+      highlights: [
+        'English required. Remote role in Spain.',
+      ],
+    };
+    const rich = evaluateOffer(
+      {
+        ...base,
+        url: 'https://example.com/jobs/rich',
+        highlights: [
+          ...base.highlights,
+          'Accounting, contabilidad, IFRS reporting, consolidation, consolidación, treasury, tesorería, controlling, forecast and budget responsibilities.',
+        ],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const poor = evaluateOffer(
+      {
+        ...base,
+        url: 'https://example.com/jobs/poor',
+        highlights: [...base.highlights, 'Finance role focused on monthly reporting.'],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+
+    assert.equal(rich.mandatory_verdict, 'cumple');
+    assert.equal(poor.mandatory_verdict, 'cumple');
+    const richFunc = rich.breakdown.find((b) => b.dimension === 'funciones')?.puntos ?? -1;
+    const poorFunc = poor.breakdown.find((b) => b.dimension === 'funciones')?.puntos ?? -1;
+    assert.ok(richFunc > poorFunc, `funciones rich=${richFunc} poor=${poorFunc}`);
+    assert.ok(
+      rich.score !== null && poor.score !== null && rich.score > poor.score,
+      `score rich=${rich.score} poor=${poor.score}`,
+    );
+  });
+
+  it('política conservadora: rol desconocido sin evidencia positiva → sin_evidencia', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Operations Analyst',
+        url: 'https://example.com/jobs/ops',
+        highlights: ['Operations Analyst for process improvement projects.'],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const rol = res.mandatory_details.find((d) => d.requisito_id === 'rol');
+    assert.equal(rol?.estado, 'sin_evidencia');
+    assert.equal(rol?.evidencia, '');
+    assert.equal(res.mandatory_verdict, 'sin_evidencia');
+  });
+
+  it('keyword: none_of tiene prioridad y produce incumple', () => {
+    const criteria = defaultCriteria();
+    criteria.mandatory.push({
+      id: 'kw',
+      kind: 'keyword',
+      description: 'Sin becarios',
+      params: { any_of: ['finance'], none_of: ['internship'] },
+    });
+    const res = evaluateOffer(
+      {
+        title: 'Finance Internship',
+        url: 'https://example.com/jobs/kw',
+        highlights: ['Finance internship for students.'],
+      },
+      criteria,
+      FACTS,
+    );
+    const kw = res.mandatory_details.find((d) => d.requisito_id === 'kw');
+    assert.equal(kw?.estado, 'incumple');
+    assert.ok(kw && kw.evidencia.length > 0);
+    assert.equal(res.mandatory_verdict, 'incumple');
+    assert.equal(res.score, null);
+  });
+
+  it('la evidencia nunca supera los 200 caracteres', () => {
+    const long = `CFO needed. ${'x'.repeat(500)} English required. ${'y'.repeat(500)}`;
+    const res = evaluateOffer(
+      {
+        title: `Chief Financial Officer ${'z'.repeat(300)}`,
+        url: 'https://example.com/jobs/long',
+        highlights: [long],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    for (const d of res.mandatory_details) {
+      assert.ok(d.evidencia.length <= 200, `${d.requisito_id}: ${d.evidencia.length}`);
+    }
+  });
+
+  it('location: presencial en país excluido → incumple', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Finance Manager',
+        url: 'https://example.com/jobs/mx',
+        highlights: ['Finance Manager. English required. Presencial en México, oficina en Ciudad de México.'],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const ubi = res.mandatory_details.find((d) => d.requisito_id === 'ubicacion');
+    assert.equal(ubi?.estado, 'incumple');
+    assert.ok(ubi && ubi.evidencia.length > 0);
+    assert.equal(res.mandatory_verdict, 'incumple');
+  });
+});
