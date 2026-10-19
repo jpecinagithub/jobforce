@@ -12,15 +12,16 @@
  * El estado queda en `queued` con la evidencia de la decisión para que el
  * motor lo recoja cuando exista.
  *
- * TODO(convergencia Worker 1): la lógica de decisión (`decidirEnvio`) vive
- * aquí de forma local porque el paquete @jobforce/autonomy del motor aún no
- * existe. Cuando esté listo, esta ruta debe delegar en él (o compartir el
- * módulo) para que la API y el motor decidan con los mismos criterios.
+ * CONVERGENCIA (Fase 4): la decisión de política delega en `evaluarEnvio` de
+ * `@jobforce/autonomy` (fuente única de verdad). Esta ruta solo compone:
+ * pliegue de checks → suelo duro de encaje → modo investigar → motor →
+ * promoción por aprobación explícita de Jon en modo revisión.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { DecisionEnvio, PoliticaAutonomia } from '@jobforce/domain';
+import { evaluarEnvio, type ContextoEnvio } from '@jobforce/autonomy';
 import { query, withTransaction } from '@jobforce/database';
 import { auditEvent } from '../audit.js';
 import { requireCsrf, requireSession } from '../auth.js';
@@ -125,8 +126,12 @@ async function gastoMesUsd(): Promise<number> {
 /**
  * Ejecuta los 9 checks pre-envío. Ningún check se simula como OK: donde no
  * hay una fuente real (sonda de vigencia), el check falla con su detalle.
+ * Devuelve también las métricas de cuota/presupuesto para la decisión.
  */
-export async function runPresendChecks(app: ApplicationRow): Promise<CheckResultado[]> {
+export async function runPresendChecks(app: ApplicationRow): Promise<{
+  checks: CheckResultado[];
+  metricas: { enviosHoy: number; enviosSemana: number; gastoMesUsd: number };
+}> {
   const checks: CheckResultado[] = [];
 
   // 1) Hay una política efectiva vigente.
@@ -205,24 +210,25 @@ export async function runPresendChecks(app: ApplicationRow): Promise<CheckResult
 
   // 7-9) Cuotas y presupuesto de la política (si hay política efectiva).
   const reglas = policy?.policy?.reglas;
+  const metricas = { enviosHoy: 0, enviosSemana: 0, gastoMesUsd: 0 };
   if (reglas) {
-    const hoy = await countSendsSince('1 day');
+    metricas.enviosHoy = await countSendsSince('1 day');
     checks.push({
       check: 'cuota_diaria',
-      ok: hoy < reglas.maxEnviosPorDia,
-      detalle: `${hoy}/${reglas.maxEnviosPorDia} envíos en las últimas 24 h`,
+      ok: metricas.enviosHoy < reglas.maxEnviosPorDia,
+      detalle: `${metricas.enviosHoy}/${reglas.maxEnviosPorDia} envíos en las últimas 24 h`,
     });
-    const semana = await countSendsSince('7 days');
+    metricas.enviosSemana = await countSendsSince('7 days');
     checks.push({
       check: 'cuota_semanal',
-      ok: semana < reglas.maxEnviosPorSemana,
-      detalle: `${semana}/${reglas.maxEnviosPorSemana} envíos en los últimos 7 días`,
+      ok: metricas.enviosSemana < reglas.maxEnviosPorSemana,
+      detalle: `${metricas.enviosSemana}/${reglas.maxEnviosPorSemana} envíos en los últimos 7 días`,
     });
-    const gasto = await gastoMesUsd();
+    metricas.gastoMesUsd = await gastoMesUsd();
     checks.push({
       check: 'presupuesto_mensual',
-      ok: gasto < reglas.presupuestoMensualUsd,
-      detalle: `${gasto.toFixed(2)}/${reglas.presupuestoMensualUsd} $ gastados este mes`,
+      ok: metricas.gastoMesUsd < reglas.presupuestoMensualUsd,
+      detalle: `${metricas.gastoMesUsd.toFixed(2)}/${reglas.presupuestoMensualUsd} $ gastados este mes`,
     });
   } else {
     for (const check of ['cuota_diaria', 'cuota_semanal', 'presupuesto_mensual']) {
@@ -230,11 +236,11 @@ export async function runPresendChecks(app: ApplicationRow): Promise<CheckResult
     }
   }
 
-  return checks;
+  return { checks, metricas };
 }
 
 // ---------------------------------------------------------------------------
-// Decisión de envío (lógica local; ver TODO del encabezado).
+// Decisión de envío: compone checks + motor de política (fuente única).
 // ---------------------------------------------------------------------------
 
 export interface DecisionResultado {
@@ -244,26 +250,23 @@ export interface DecisionResultado {
 }
 
 /**
- * Evalúa la política sobre una candidatura y sus checks.
- * Criterios (mismos del contrato de tipos):
- *  - cualquier check fallido → `bloqueado`;
- *  - portal no permitido o empresa excluida → `bloqueado`;
- *  - encaje desconocido → según `tratamientoDesconocidos`;
- *  - encaje < umbralEncajeRevision → `bloqueado`;
- *  - encaje < umbralEncajeAutomatico → `requiere_revision`;
- *  - modo `investigar` → `requiere_revision` (nunca envía solo);
- *  - modo `preparar_para_revision` → `permitido` solo con aprobación de Jon
- *    (estado `approved`, ya exigido por el check `oferta_aprobada`);
- *  - modo `ejecutar_automatico` → `permitido` solo con autorización escrita
- *    vigente; sin ella, `requiere_revision`.
+ * Evalúa la política sobre una candidatura y sus checks, componiendo:
+ *  1. Pliegue de checks: cualquier check fallido → `bloqueado`.
+ *  2. Suelo duro de encaje: por debajo de `umbralEncajeRevision` → `bloqueado`.
+ *  3. Modo `investigar` → `requiere_revision` (nunca encola solo).
+ *  4. Núcleo de la política: `evaluarEnvio` de `@jobforce/autonomy`
+ *     (fuente única de verdad; incluye el LÍMITE DURO: automático sin
+ *     autorización escrita → `bloqueado`).
+ *  5. En `preparar_para_revision`, la aprobación explícita de Jon (check
+ *     `oferta_aprobada` ya superado) satisface el requisito de revisión →
+ *     `permitido` (encolar).
  */
 export function decidirEnvio(
   app: ApplicationRow,
   politica: PoliticaAutonomia,
   checks: CheckResultado[],
+  metricas: { enviosHoy: number; enviosSemana: number; gastoMesUsd: number },
 ): { decision: DecisionEnvio; motivos: string[] } {
-  const motivos: string[] = [];
-
   const fallidos = checks.filter((c) => !c.ok);
   if (fallidos.length > 0) {
     return {
@@ -272,62 +275,50 @@ export function decidirEnvio(
     };
   }
 
-  const reglas = politica.reglas;
-
-  const portal = (app.portal ?? '').toLowerCase();
-  if (!reglas.portalesPermitidos.map((p) => p.toLowerCase()).includes(portal)) {
-    return {
-      decision: 'bloqueado',
-      motivos: [`portal_no_permitido: ${app.portal ?? '(sin portal)'}`],
-    };
-  }
-
-  const empresa = (app.offer_company ?? '').toLowerCase();
-  if (empresa && reglas.empresasExcluidas.map((e) => e.toLowerCase()).includes(empresa)) {
-    return { decision: 'bloqueado', motivos: [`empresa_excluida: ${app.offer_company}`] };
-  }
-
-  if (app.mandatory_verdict === 'incumple') {
-    return { decision: 'bloqueado', motivos: ['requisitos_obligatorios_no_cumplidos'] };
-  }
-
   const score = app.score === null ? null : Number(app.score);
-  if (score === null || Number.isNaN(score)) {
-    if (reglas.tratamientoDesconocidos === 'descartar') {
-      return { decision: 'bloqueado', motivos: ['encaje_desconocido_descartado_por_politica'] };
-    }
-    return { decision: 'requiere_revision', motivos: ['encaje_desconocido'] };
-  }
-
-  if (score < reglas.umbralEncajeRevision) {
+  if (score !== null && !Number.isNaN(score) && score < politica.reglas.umbralEncajeRevision) {
     return {
       decision: 'bloqueado',
-      motivos: [`encaje_insuficiente: ${score} < ${reglas.umbralEncajeRevision}`],
-    };
-  }
-  if (score < reglas.umbralEncajeAutomatico) {
-    return {
-      decision: 'requiere_revision',
-      motivos: [`encaje_bajo_umbral_automatico: ${score} < ${reglas.umbralEncajeAutomatico}`],
+      motivos: [`encaje_insuficiente: ${score} < ${politica.reglas.umbralEncajeRevision}`],
     };
   }
 
-  switch (politica.modoActivo) {
-    case 'investigar':
-      motivos.push('modo_investigar_no_envia_solo');
-      return { decision: 'requiere_revision', motivos };
-    case 'preparar_para_revision':
-      // El check `oferta_aprobada` ya garantizó el estado `approved` (= Jon
-      // aprobó explícitamente); con encaje suficiente, se permite encolar.
-      motivos.push('aprobacion_explicita_de_jon');
-      return { decision: 'permitido', motivos };
-    case 'ejecutar_automatico':
-      if (politica.autorizacionEscrita === null) {
-        return { decision: 'requiere_revision', motivos: ['sin_autorizacion_escrita'] };
-      }
-      motivos.push('autorizacion_escrita_vigente');
-      return { decision: 'permitido', motivos };
+  if (politica.modoActivo === 'investigar') {
+    return { decision: 'requiere_revision', motivos: ['modo_investigar_no_envia_solo'] };
   }
+
+  const checkOk = (nombre: string): boolean => checks.some((c) => c.check === nombre && c.ok);
+  const ctx: ContextoEnvio = {
+    encaje: score === null || Number.isNaN(score) ? null : score,
+    // Conservador: sin veredicto de evaluación no se afirma cumplimiento.
+    obligatorios:
+      app.mandatory_verdict === 'cumple'
+        ? 'cumple'
+        : app.mandatory_verdict === 'incumple'
+          ? 'incumple'
+          : 'sin_evidencia',
+    portal: app.portal ?? '',
+    empresa: app.offer_company ?? '',
+    enviosHoy: metricas.enviosHoy,
+    enviosSemana: metricas.enviosSemana,
+    gastoMesUsd: metricas.gastoMesUsd,
+    duplicado: !checkOk('sin_duplicados'),
+    ofertaVigente: checkOk('oferta_vigente'),
+  };
+  const ev = evaluarEnvio(politica, ctx);
+
+  if (ev.decision === 'requiere_revision' && politica.modoActivo === 'preparar_para_revision') {
+    // La aprobación explícita de Jon solo promueve a `permitido` si el encaje
+    // alcanza el umbral automático; por debajo queda en revisión.
+    const encajeSuficiente = ctx.encaje !== null && ctx.encaje >= politica.reglas.umbralEncajeAutomatico;
+    if (encajeSuficiente) {
+      return {
+        decision: 'permitido',
+        motivos: [...ev.motivos, 'aprobacion_explicita_de_jon: candidatura en estado approved'],
+      };
+    }
+  }
+  return { decision: ev.decision, motivos: ev.motivos };
 }
 
 interface SendRow {
@@ -368,7 +359,7 @@ export async function registerSendRoutes(app: FastifyInstance): Promise<void> {
     if (!application) {
       return reply.code(404).send({ error: 'candidatura_no_encontrada' });
     }
-    const checks = await runPresendChecks(application);
+    const { checks } = await runPresendChecks(application);
     return reply.send({ application_id: id, checks });
   });
 
@@ -412,7 +403,7 @@ export async function registerSendRoutes(app: FastifyInstance): Promise<void> {
 
     // 3) Checks + decisión de política.
     const policy = await getEffectivePolicy();
-    const checks = await runPresendChecks(application);
+    const { checks, metricas } = await runPresendChecks(application);
     if (!policy) {
       return reply.send({
         application_id: id,
@@ -421,7 +412,7 @@ export async function registerSendRoutes(app: FastifyInstance): Promise<void> {
         checks,
       });
     }
-    const { decision, motivos } = decidirEnvio(application, policy.policy, checks);
+    const { decision, motivos } = decidirEnvio(application, policy.policy, checks, metricas);
     if (decision !== 'permitido') {
       return reply.send({ application_id: id, decision, motivos, checks });
     }
