@@ -9,6 +9,7 @@ import {
   createExaClient,
   generateQueries,
   canonicalUrl,
+  checkUrlAlive,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
 } from '../src/index.js';
 import { defaultCriteria, type CampaignCriteria } from '@jobforce/domain';
@@ -163,6 +164,7 @@ describe('createExaClient', () => {
       query: 'CFO finance job',
       type: 'auto',
       numResults: 5,
+      excludeDomains: ['linkedin.com'],
       contents: { highlights: true },
     });
 
@@ -207,5 +209,45 @@ describe('createExaClient', () => {
 describe('EXA_COST_ESTIMATE_PER_SEARCH_USD', () => {
   it('es la estimación conservadora del contrato', () => {
     assert.equal(EXA_COST_ESTIMATE_PER_SEARCH_USD, 0.01);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkUrlAlive
+// ---------------------------------------------------------------------------
+
+describe('checkUrlAlive', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('devuelve true con HEAD 200', async () => {
+    globalThis.fetch = (async () => new Response(null, { status: 200 })) as typeof fetch;
+    assert.equal(await checkUrlAlive('https://example.com/oferta'), true);
+  });
+
+  it('devuelve false con 404', async () => {
+    globalThis.fetch = (async () => new Response(null, { status: 404 })) as typeof fetch;
+    assert.equal(await checkUrlAlive('https://example.com/muerta'), false);
+  });
+
+  it('reintenta con GET si HEAD devuelve 405', async () => {
+    let calls = 0;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      calls += 1;
+      if (init?.method === 'HEAD') return new Response(null, { status: 405 });
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    assert.equal(await checkUrlAlive('https://example.com/oferta'), true);
+    assert.equal(calls, 2);
+  });
+
+  it('devuelve false ante error de red', async () => {
+    globalThis.fetch = (async () => {
+      throw new Error('boom');
+    }) as typeof fetch;
+    assert.equal(await checkUrlAlive('https://example.com/oferta'), false);
   });
 });

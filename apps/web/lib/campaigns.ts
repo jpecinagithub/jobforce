@@ -120,6 +120,8 @@ export interface OfferSummary {
   title: string | null;
   company: string | null;
   url: string;
+  /** null = sin comprobar; true = viva; false = rota. */
+  url_ok: boolean | null;
   canonical_url: string;
   published_date: string | null;
   retrieved_at: string;

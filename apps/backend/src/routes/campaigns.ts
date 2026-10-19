@@ -32,6 +32,7 @@ import { defaultCriteria } from '@jobforce/domain';
 import { query } from '@jobforce/database';
 import {
   canonicalUrl,
+  checkUrlAlive,
   createExaClient,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
   generateQueries,
@@ -200,6 +201,8 @@ interface OfferRow {
   retrieved_at: Date;
   highlights: unknown;
   raw: unknown;
+  url_ok: boolean | null;
+  url_checked_at: Date | null;
   mandatory_verdict: string | null;
   score: string | null;
   breakdown: unknown;
@@ -531,6 +534,22 @@ export async function registerCampaignRoutes(
             WHERE id = $1`,
           [searchId, resp.requestId ?? null, cost, resp.results.length, duplicatesCount],
         );
+        // Validación de enlaces (calidad de búsqueda): comprueba en paralelo
+        // que las URLs de las ofertas nuevas sigan vivas y lo registra.
+        // No bloquea el flujo si falla: url_ok queda en null (sin comprobar).
+        try {
+          const checks = await Promise.all(
+            newOffers.map(async (offer) => ({ id: offer.id, ok: await checkUrlAlive(offer.url) })),
+          );
+          for (const c of checks) {
+            await query(`UPDATE offers SET url_ok = $2, url_checked_at = now() WHERE id = $1`, [
+              c.id,
+              c.ok,
+            ]);
+          }
+        } catch {
+          // La validación es informativa; un fallo no invalida la búsqueda.
+        }
         await query(
           `UPDATE campaigns SET exa_spent_usd = exa_spent_usd + $2, updated_at = now() WHERE id = $1`,
           [id, cost],
@@ -595,6 +614,7 @@ export async function registerCampaignRoutes(
     const rows = await query<OfferRow>(
       `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
               o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
+              o.url_ok, o.url_checked_at,
               e.mandatory_verdict, e.score, e.breakdown
          FROM offers o
          LEFT JOIN evaluations e
@@ -609,6 +629,7 @@ export async function registerCampaignRoutes(
         title: o.title,
         company: o.company,
         url: o.url,
+        url_ok: o.url_ok,
         canonical_url: o.canonical_url,
         published_date: o.published_date,
         retrieved_at: toIso(o.retrieved_at),

@@ -17,6 +17,35 @@ import {
 export const dynamic = 'force-dynamic';
 
 /**
+ * La campaña de Fase 3 guarda `criteria` con forma propia
+ * ({nota, fuente, criterios, generada_en}), no CampaignCriteria.
+ * El editor estándar reventaría con `criteria.roles.join`; estas campañas
+ * históricas se muestran en solo lectura.
+ */
+function isStandardCriteria(c: unknown): boolean {
+  return (
+    !!c &&
+    typeof c === 'object' &&
+    Array.isArray((c as Record<string, unknown>).roles) &&
+    typeof (c as Record<string, unknown>).preferences === 'object'
+  );
+}
+
+function CustomCriteriaView({ criteria }: { criteria: Record<string, unknown> }) {
+  const str = (v: unknown) => (typeof v === 'string' ? v : v == null ? '—' : JSON.stringify(v));
+  return (
+    <dl style={{ display: 'grid', gap: '0.6rem', margin: 0 }}>
+      {Object.entries(criteria).map(([k, v]) => (
+        <div key={k}>
+          <dt className="muted" style={{ fontSize: '0.85rem', textTransform: 'uppercase' }}>{k}</dt>
+          <dd style={{ margin: '0.15rem 0 0' }}>{str(v)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
  * Detalle de campaña (contrato §6):
  * - GET /api/campaigns/:id → editor de criterios (PUT /api/campaigns/:id).
  * - POST /api/campaigns/:id/search → lanzar búsqueda.
@@ -64,7 +93,16 @@ export default async function CampaignDetailPage({
       </p>
 
       <h2>Criterios</h2>
-      <CriteriaEditor campaign={campaign} />
+      {isStandardCriteria(campaign.criteria) ? (
+        <CriteriaEditor campaign={campaign} />
+      ) : (
+        <div className="card">
+          <p className="muted" style={{ marginTop: 0 }}>
+            Esta campaña usa un formato de criterios propio (histórica, no editable aquí).
+          </p>
+          <CustomCriteriaView criteria={campaign.criteria as unknown as Record<string, unknown>} />
+        </div>
+      )}
 
       <h2>Búsqueda</h2>
       <SearchLauncher campaignId={campaign.id} />
@@ -99,6 +137,14 @@ export default async function CampaignDetailPage({
                       </a>
                     ) : (
                       o.title || '—'
+                    )}
+                    {o.url_ok === false && (
+                      <>
+                        {' '}
+                        <span className="badge danger" title="El enlace no responde: la oferta puede haber expirado">
+                          enlace roto
+                        </span>
+                      </>
                     )}
                   </td>
                   <td>{o.company || '—'}</td>

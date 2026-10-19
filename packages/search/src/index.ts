@@ -11,7 +11,15 @@ import type { CampaignCriteria, MandatoryRequirement } from '@jobforce/domain';
 export interface ExaSearchOptions {
   query: string;
   numResults: number;
+  /** Dominios a excluir (p. ej. linkedin.com: devuelve perfiles, no ofertas). */
+  excludeDomains?: string[];
 }
+
+/**
+ * Dominios excluidos por defecto en búsquedas de empleo: no publican
+ * ofertas como tales (perfiles personales, agregadores muertos, etc.).
+ */
+export const DEFAULT_EXCLUDED_DOMAINS = ['linkedin.com'];
 
 export interface ExaResult {
   id: string;
@@ -61,6 +69,7 @@ export function createExaClient(apiKey: string): ExaClient {
           query: opts.query,
           type: 'auto',
           numResults: opts.numResults,
+          excludeDomains: opts.excludeDomains ?? DEFAULT_EXCLUDED_DOMAINS,
           contents: { highlights: true },
         }),
         signal: controller.signal,
@@ -208,5 +217,40 @@ export function canonicalUrl(url: string): string {
     return u.toString();
   } catch {
     return url;
+  }
+}
+
+const URL_CHECK_TIMEOUT_MS = 8_000;
+
+/**
+ * Comprueba si una URL de oferta sigue viva (HEAD, con fallback a GET
+ * parcial). Devuelve true si responde con estado < 400.
+ *
+ * No lanza: cualquier error de red, timeout o estado >= 400 → false.
+ */
+export async function checkUrlAlive(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), URL_CHECK_TIMEOUT_MS);
+  try {
+    let res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'JOBFORCE-linkcheck/1.0' },
+    });
+    if (res.status === 405 || res.status === 501) {
+      // Algunos servidores no aceptan HEAD: reintenta con GET parcial.
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: { 'User-Agent': 'JOBFORCE-linkcheck/1.0', Range: 'bytes=0-1023' },
+      });
+    }
+    return res.status < 400;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
   }
 }

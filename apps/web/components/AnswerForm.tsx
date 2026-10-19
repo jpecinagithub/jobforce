@@ -94,7 +94,6 @@ export default function AnswerForm() {
         <select id="l" value={language} onChange={(e) => setLanguage(e.target.value)}>
           <option value="es">Español</option>
           <option value="en">Inglés</option>
-          <option value="nl">Neerlandés</option>
         </select>
       </div>
       <button type="submit" className="btn" disabled={loading}>
