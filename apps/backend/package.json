@@ -5,6 +5,7 @@
     "@fastify/helmet": "13.2.0",
     "@fastify/rate-limit": "11.2.1",
     "@jobforce/config": "workspace:*",
+    "@jobforce/costs": "workspace:*",
     "@jobforce/database": "workspace:*",
     "@jobforce/domain": "workspace:*",
     "@jobforce/eval": "workspace:*",

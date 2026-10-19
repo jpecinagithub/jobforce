@@ -42,6 +42,7 @@ import {
 } from '../routes/sends.js';
 import { marcarEnvioIncierto } from '../reconcile.js';
 import { crearDriver } from './driver.js';
+import { presupuestoDisponible, registrarTiempoNavegador } from '@jobforce/costs';
 import {
   AnomaliaEnvio,
   type BrowserDriver,
@@ -390,6 +391,8 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
   };
 
   let driver: BrowserDriver | null = null;
+  let navegadorIniciado = false;
+  let tNavegador0 = 0;
   try {
     // 2) Toma de propiedad: se elimina el bloqueo que dejó request-send (el
     //    reclamo atómico queued→sending ya es el mutex real). El ejecutor
@@ -479,7 +482,21 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
       throw e;
     }
 
-    // 6b) Bloqueo con vencimiento (15 min) por candidatura para la fase del
+    // 6b) Presupuesto mensual global (Fase 5): sin presupuesto no se abre el
+    //     navegador. El gasto real lo mide el libro de costes.
+    const disp = await presupuestoDisponible();
+    if (!disp.ok) {
+      return await fallar(
+        send,
+        app.id,
+        `presupuesto agotado: no se abre el navegador (${disp.motivo})`,
+        'fuera_de_politica',
+        { presupuesto: disp.codigo },
+        actorId,
+      );
+    }
+
+    // 6c) Bloqueo con vencimiento (15 min) por candidatura para la fase del
     //     navegador. Un solo envío en vuelo por candidatura.
     await query(
       `INSERT INTO send_locks (application_id, locked_until, locked_by)
@@ -490,7 +507,10 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
     );
 
     // 7) Rellenar + subir + re-verificar (puede lanzar AnomaliaEnvio).
+    //    Se mide el tiempo de navegador para el libro de costes (Fase 5).
     try {
+      navegadorIniciado = true;
+      tNavegador0 = Date.now();
       await driver.preparar(job);
     } catch (e) {
       if (e instanceof AnomaliaEnvio) {
@@ -552,6 +572,15 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
   } finally {
     if (driver) {
       await driver.cerrar().catch(() => {});
+    }
+    // Libro de costes (Fase 5): tiempo de navegador por candidatura, con
+    // idempotencia por envío. No debe tumbar el resultado del envío si falla.
+    if (navegadorIniciado) {
+      await registrarTiempoNavegador({
+        applicationId: send.application_id,
+        sendId: send.id,
+        duracionMs: Date.now() - tNavegador0,
+      }).catch(() => {});
     }
     await liberar();
   }

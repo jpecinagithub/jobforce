@@ -8,6 +8,7 @@
 
 import { loadConfig } from '@jobforce/config';
 import { closePool, runMigrations } from '@jobforce/database';
+import { fijarPresupuesto } from '@jobforce/costs';
 import { buildServer } from './server.js';
 import { iniciarWorkerSends, type WorkerHandle } from './sender/index.js';
 
@@ -17,6 +18,15 @@ async function main(): Promise<void> {
   process.env.DATABASE_URL = config.databaseUrl;
 
   await runMigrations(config.databaseUrl);
+
+  // Presupuestos de costes (Fase 5): si las variables están definidas, tienen
+  // prioridad sobre lo guardado en `budget_config` y se siembran al arrancar.
+  if (config.costDailyBudgetUsd !== null) {
+    await fijarPresupuesto('daily_usd', config.costDailyBudgetUsd);
+  }
+  if (config.costMonthlyBudgetUsd !== null) {
+    await fijarPresupuesto('monthly_usd', config.costMonthlyBudgetUsd);
+  }
 
   const app = buildServer(config);
 

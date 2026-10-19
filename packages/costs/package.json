@@ -1,0 +1,17 @@
+{
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@jobforce/database": "workspace:*"
+  },
+  "main": "./dist/index.js",
+  "name": "@jobforce/costs",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "types": "./dist/index.d.ts",
+  "version": "0.1.0"
+}

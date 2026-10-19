@@ -35,6 +35,18 @@ const RawConfigSchema = z.object({
   // Worker del ejecutor de envíos (Fase 4+). Desactivado por defecto: solo se
   // activa explícitamente en el despliegue donde deba correr el worker.
   SENDER_WORKER_ENABLED: BooleanFromEnv,
+  // Presupuestos globales de costes (Fase 5). Si están definidas, al arrancar
+  // el backend se siembran en `budget_config` (tienen prioridad sobre el valor
+  // guardado). El panel puede cambiarlos después con PUT /api/costs/budgets.
+  COST_DAILY_BUDGET_USD: z.coerce.number().min(0).optional(),
+  COST_MONTHLY_BUDGET_USD: z.coerce.number().min(0).optional(),
+  // Tarifas LLM en JSON: {"modelo": {"input": x, "output": y}} (USD por millón
+  // de tokens). Opcional; si no, se usan las orientativas de @jobforce/costs.
+  COST_LLM_PRICES_JSON: z.string().trim().optional(),
+  // Circuit breaker (Fase 5): fallos seguidos que abren el circuito y backoff
+  // base en ms.
+  BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().min(1).default(5),
+  BREAKER_BASE_BACKOFF_MS: z.coerce.number().int().min(1000).default(5 * 60 * 1000),
 });
 
 const ConfigSchema = RawConfigSchema.transform((raw) => ({
@@ -51,6 +63,11 @@ const ConfigSchema = RawConfigSchema.transform((raw) => ({
   exaApiKey: raw.EXA_API_KEY ?? null,
   // Worker del ejecutor de envíos: desactivado por defecto.
   senderWorkerEnabled: raw.SENDER_WORKER_ENABLED ?? false,
+  // Presupuestos de costes (Fase 5): null = no sembrar al arrancar.
+  costDailyBudgetUsd: raw.COST_DAILY_BUDGET_USD ?? null,
+  costMonthlyBudgetUsd: raw.COST_MONTHLY_BUDGET_USD ?? null,
+  breakerFailureThreshold: raw.BREAKER_FAILURE_THRESHOLD,
+  breakerBaseBackoffMs: raw.BREAKER_BASE_BACKOFF_MS,
 }));
 
 export type AppConfig = z.output<typeof ConfigSchema>;

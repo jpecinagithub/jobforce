@@ -231,6 +231,8 @@ export interface Campaign {
   criteria: CampaignCriteria;
   exa_budget_cap_usd: number;
   exa_spent_usd: number;
+  /** Tope total de gasto (todas las categorías) en USD; null = sin tope propio. */
+  total_budget_cap_usd?: number | null;
   status: 'draft' | 'active' | 'archived';
   created_at: string;
   updated_at: string;

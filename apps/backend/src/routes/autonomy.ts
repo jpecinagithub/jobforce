@@ -171,11 +171,10 @@ export async function registerAutonomyRoutes(app: FastifyInstance): Promise<void
         WHERE created_at >= date_trunc('day', now())
           AND status IN ('queued','sending','sent')`,
     );
-    // Gasto del mes: suma del coste registrado en la evidencia de cada envío
-    // (hoy 0: aún no existe ejecutor que impute costes reales).
+    // Gasto del mes: suma del libro de costes (Fase 5), todas las categorías.
     const gasto = await query<{ total: string | null }>(
-      `SELECT SUM(COALESCE((evidence->>'cost_usd')::numeric, 0))::text AS total
-         FROM sends
+      `SELECT SUM(cantidad_usd)::text AS total
+         FROM cost_events
         WHERE created_at >= date_trunc('month', now())`,
     );
     return {

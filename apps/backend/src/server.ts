@@ -20,6 +20,7 @@ import { registerConfigRoutes } from './routes/config.js';
 import { registerAutonomyRoutes } from './routes/autonomy.js';
 import { registerInterventionRoutes } from './routes/interventions.js';
 import { registerSendRoutes } from './routes/sends.js';
+import { registerCostRoutes } from './routes/costs.js';
 
 export function buildServer(config: AppConfig): FastifyInstance {
   const app = Fastify({ logger: config.nodeEnv !== 'test' });
@@ -58,6 +59,7 @@ export function buildServer(config: AppConfig): FastifyInstance {
   app.register(registerAutonomyRoutes);
   app.register(registerInterventionRoutes);
   app.register(registerSendRoutes);
+  app.register(registerCostRoutes);
 
   return app;
 }

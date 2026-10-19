@@ -45,8 +45,17 @@ export async function resetDb(): Promise<void> {
               campaigns, searches, offers, evaluations, campaign_reports,
               applications, documents, gmail_sync_state, gmail_messages,
               autonomy_policies, sends, send_locks, outbox, interventions,
-              portal_accounts, application_outcomes
+              portal_accounts, application_outcomes,
+              cost_events, connector_breakers
      RESTART IDENTITY CASCADE`,
+  );
+  // La migración 006 siembra los presupuestos; los tests parten de valores
+  // conocidos (se re-siembran tras el TRUNCATE).
+  await query(
+    `INSERT INTO budget_config (clave, valor_usd) VALUES
+       ('daily_usd', 5.0000), ('monthly_usd', 50.0000)
+     ON CONFLICT (clave) DO UPDATE
+       SET valor_usd = EXCLUDED.valor_usd, actualizado_en = now()`,
   );
   // La migración 004 siembra la política v1 como borrador; los tests parten
   // de ese estado inicial conocido.

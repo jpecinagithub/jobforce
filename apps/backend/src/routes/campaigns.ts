@@ -38,6 +38,13 @@ import {
   type ExaClient,
 } from '@jobforce/search';
 import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
+import {
+  conectorDisponible,
+  presupuestoDisponible,
+  registrarCoste,
+  registrarExito,
+  registrarFallo,
+} from '@jobforce/costs';
 import { auditEvent } from '../audit.js';
 import { requireCsrf, requireSession } from '../auth.js';
 import { validateBody } from '../validation.js';
@@ -128,6 +135,12 @@ const UpdateCampaignBody = z.object({
     .positive('el límite de presupuesto debe ser mayor que 0')
     .max(100, 'el límite de presupuesto no puede superar 100 $')
     .optional(),
+  total_budget_cap_usd: z
+    .number()
+    .positive('el límite total debe ser mayor que 0')
+    .max(1000, 'el límite total no puede superar 1000 $')
+    .nullable()
+    .optional(),
   status: CampaignStatusSchema.optional(),
 });
 
@@ -152,6 +165,7 @@ interface CampaignRow {
   criteria: CampaignCriteria;
   exa_budget_cap_usd: string;
   exa_spent_usd: string;
+  total_budget_cap_usd: string | null;
   status: string;
   created_at: Date;
   updated_at: Date;
@@ -203,6 +217,7 @@ function mapCampaign(row: CampaignRow): Campaign {
     criteria: row.criteria,
     exa_budget_cap_usd: Number(row.exa_budget_cap_usd),
     exa_spent_usd: Number(row.exa_spent_usd),
+    total_budget_cap_usd: row.total_budget_cap_usd === null ? null : Number(row.total_budget_cap_usd),
     status: row.status as Campaign['status'],
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
@@ -238,8 +253,8 @@ async function loadActiveProfileFacts(): Promise<{
 
 async function getCampaignOr404(id: string): Promise<CampaignRow | null> {
   const rows = await query<CampaignRow>(
-    `SELECT id, name, criteria, exa_budget_cap_usd, exa_spent_usd, status,
-            created_at, updated_at
+    `SELECT id, name, criteria, exa_budget_cap_usd, exa_spent_usd,
+            total_budget_cap_usd, status, created_at, updated_at
        FROM campaigns WHERE id = $1`,
     [id],
   );
@@ -262,7 +277,7 @@ export async function registerCampaignRoutes(
   app.get('/api/campaigns', authOnly, async () => {
     const rows = await query<CampaignRow>(
       `SELECT c.id, c.name, c.criteria, c.exa_budget_cap_usd, c.exa_spent_usd,
-              c.status, c.created_at, c.updated_at,
+              c.total_budget_cap_usd, c.status, c.created_at, c.updated_at,
               (SELECT COUNT(*) FROM searches s WHERE s.campaign_id = c.id) AS searches_count,
               (SELECT COUNT(*) FROM offers o WHERE o.campaign_id = c.id) AS offers_count
          FROM campaigns c ORDER BY c.created_at DESC`,
@@ -337,6 +352,11 @@ export async function registerCampaignRoutes(
       sets.push(`exa_budget_cap_usd = $${params.length}`);
       changed.push('exa_budget_cap_usd');
     }
+    if (valid.data.total_budget_cap_usd !== undefined) {
+      params.push(valid.data.total_budget_cap_usd);
+      sets.push(`total_budget_cap_usd = $${params.length}`);
+      changed.push('total_budget_cap_usd');
+    }
     if (valid.data.status !== undefined) {
       params.push(valid.data.status);
       sets.push(`status = $${params.length}`);
@@ -388,7 +408,9 @@ export async function registerCampaignRoutes(
     }
     const numResults = valid.data.num_results;
 
-    // 3) Presupuesto: estimación conservadora ANTES de tocar Exa.
+    // 3) Presupuesto: estimación conservadora ANTES de tocar Exa (tope de
+    //    campaña heredado de Fase 2) + presupuestos globales diario/mensual
+    //    y tope total de la campaña (Fase 5, libro de costes).
     const spent = Number(campaignRow.exa_spent_usd);
     const cap = Number(campaignRow.exa_budget_cap_usd);
     const estimate = resolvedQueries.length * EXA_COST_ESTIMATE_PER_SEARCH_USD;
@@ -396,6 +418,18 @@ export async function registerCampaignRoutes(
       return reply
         .code(409)
         .send({ error: 'presupuesto_exa_agotado', gastado: spent, limite: cap });
+    }
+    const disp = await presupuestoDisponible(id);
+    if (!disp.ok) {
+      return reply.code(409).send({ error: disp.codigo, motivo: disp.motivo });
+    }
+
+    // 3b) Circuit breaker de Exa: si está abierto, no se llama.
+    const exaDisp = await conectorDisponible('exa');
+    if (!exaDisp.disponible) {
+      return reply
+        .code(503)
+        .send({ error: 'conector_deshabilitado_temporalmente', motivo: exaDisp.motivo });
     }
 
     // 4) Clave de Exa configurada. El valor nunca se loguea.
@@ -501,6 +535,16 @@ export async function registerCampaignRoutes(
           `UPDATE campaigns SET exa_spent_usd = exa_spent_usd + $2, updated_at = now() WHERE id = $1`,
           [id, cost],
         );
+        // Libro de costes (Fase 5): evento inmutable por búsqueda. La clave
+        // de idempotencia evita duplicar el gasto si se reintenta.
+        await registrarCoste({
+          campaignId: id,
+          categoria: 'exa_search',
+          cantidadUsd: cost,
+          detalles: { search_id: searchId, query: searchQuery, resultados: resp.results.length },
+          idempotencyKey: `exa:${searchId}`,
+        });
+        await registrarExito('exa');
         totalCost += cost;
         summaries.push({
           id: searchId,
@@ -515,6 +559,8 @@ export async function registerCampaignRoutes(
           searchId,
           message,
         ]);
+        // El fallo alimenta el circuit breaker de Exa (Fase 5).
+        await registrarFallo('exa', message);
         summaries.push({
           id: searchId,
           query: searchQuery,
