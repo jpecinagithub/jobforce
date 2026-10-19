@@ -363,22 +363,15 @@ describe('cookie de sesión cross-site', () => {
       SECRETS_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     });
     try {
+      const auth = await setupAndLogin(app, 'admin', 'CookieTest-123-segura');
+      // Segundo login para inspeccionar la cabecera Set-Cookie.
       const login = await app.inject({
         method: 'POST',
         url: '/api/auth/login',
-        payload: { username: 'no-existe', password: 'x'.repeat(20) },
+        payload: { username: auth.username, password: 'CookieTest-123-segura' },
       });
-      // 401 esperado (no hay admin), pero nos basta con crear uno primero.
-      assert.equal(login.statusCode, 401);
-      const auth = await setupAndLogin(app);
-      // Repetimos el login para inspeccionar la cabecera Set-Cookie.
-      const login2 = await app.inject({
-        method: 'POST',
-        url: '/api/auth/login',
-        payload: { username: auth.username, password: 'TestPass123!' },
-      });
-      assert.equal(login2.statusCode, 200);
-      const setCookie = String(login2.headers['set-cookie'] ?? '');
+      assert.equal(login.statusCode, 200);
+      const setCookie = String(login.headers['set-cookie'] ?? '');
       assert.ok(setCookie.includes('SameSite=None'), `falta SameSite=None: ${setCookie}`);
       assert.ok(setCookie.includes('Secure'), `falta Secure: ${setCookie}`);
       assert.ok(setCookie.includes('HttpOnly'), `falta HttpOnly: ${setCookie}`);
@@ -393,11 +386,11 @@ describe('cookie de sesión cross-site', () => {
       SECRETS_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     });
     try {
-      const auth = await setupAndLogin(app);
+      const auth = await setupAndLogin(app, 'admin', 'CookieTest-123-segura');
       const login = await app.inject({
         method: 'POST',
         url: '/api/auth/login',
-        payload: { username: auth.username, password: 'TestPass123!' },
+        payload: { username: auth.username, password: 'CookieTest-123-segura' },
       });
       const setCookie = String(login.headers['set-cookie'] ?? '');
       assert.ok(setCookie.includes('SameSite=Lax'), `se esperaba Lax: ${setCookie}`);
