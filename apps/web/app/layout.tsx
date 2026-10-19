@@ -14,6 +14,8 @@ const NAV = [
   { href: '/perfil', label: 'Perfil' },
   { href: '/campanas', label: 'Campañas' },
   { href: '/respuestas', label: 'Respuestas' },
+  { href: '/autonomia', label: 'Autonomía' },
+  { href: '/intervenciones', label: 'Intervenciones' },
   { href: '/configuracion', label: 'Configuración' },
 ];
 
