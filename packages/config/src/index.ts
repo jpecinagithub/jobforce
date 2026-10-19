@@ -21,6 +21,10 @@ const RawConfigSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   SESSION_COOKIE_SECURE: BooleanFromEnv,
   SESSION_TTL_HOURS: z.coerce.number().positive().default(24),
+  // Rate limit del login (por IP). Configurable para poder relajarlo en tests
+  // sin tocar el valor estricto de producción.
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  LOGIN_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
 });
 
 const ConfigSchema = RawConfigSchema.transform((raw) => ({
@@ -30,6 +34,8 @@ const ConfigSchema = RawConfigSchema.transform((raw) => ({
   // Por defecto, cookie segura en producción aunque no se indique.
   sessionCookieSecure: raw.SESSION_COOKIE_SECURE ?? raw.NODE_ENV === 'production',
   sessionTtlHours: raw.SESSION_TTL_HOURS,
+  loginRateLimitMax: raw.LOGIN_RATE_LIMIT_MAX,
+  loginRateLimitWindowMs: raw.LOGIN_RATE_LIMIT_WINDOW_MS,
 }));
 
 export type AppConfig = z.output<typeof ConfigSchema>;

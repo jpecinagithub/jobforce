@@ -14,7 +14,9 @@ import { CSRF_HEADER_NAME } from '@jobforce/domain';
 import { buildServer } from '../src/server.js';
 
 /** Crea la app de test con las migraciones aplicadas. */
-export async function buildTestApp(): Promise<FastifyInstance> {
+export async function buildTestApp(
+  overrides: Record<string, string> = {},
+): Promise<FastifyInstance> {
   if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL es obligatoria para ejecutar los tests del backend.');
   }
@@ -22,6 +24,11 @@ export async function buildTestApp(): Promise<FastifyInstance> {
     ...process.env,
     NODE_ENV: 'test',
     SESSION_COOKIE_SECURE: 'false',
+    // Por defecto, rate limit holgado en tests: los ficheros hacen login en
+    // cada beforeEach y el límite estricto (10/5min) los tumbaría. El fichero
+    // auth-ratelimit.test.ts fija los valores estrictos explícitamente.
+    LOGIN_RATE_LIMIT_MAX: '1000',
+    ...overrides,
   });
   process.env.DATABASE_URL = config.databaseUrl;
   await runMigrations(config.databaseUrl);

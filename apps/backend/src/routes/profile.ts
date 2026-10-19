@@ -29,6 +29,11 @@ const CreateVersionBody = z.object({
 const VALIDATION_STATUSES = ['confirmed', 'unconfirmed', 'preference', 'unknown'] as const;
 const SENSITIVITIES = ['normal', 'sensitive', 'highly_sensitive'] as const;
 
+// Los ids de versión son UUID v4; un id malformado nunca puede existir en BD,
+// así que se rechaza con 400 antes de tocar la base de datos (evita 500 por
+// "invalid input syntax for type uuid").
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const CreateFactBody = z.object({
   category: z.string().trim().min(1, 'la categoría es obligatoria').max(100),
   key: z.string().trim().min(1, 'la clave es obligatoria').max(200),
@@ -151,6 +156,9 @@ export async function registerProfileRoutes(app: FastifyInstance): Promise<void>
     const valid = validateBody(CreateFactBody, req.body, reply);
     if (!valid) return;
     const { id } = req.params as { id: string };
+    if (!UUID_RE.test(id ?? '')) {
+      return reply.code(400).send({ error: 'version_invalida' });
+    }
 
     const versions = await query<{ id: string }>('SELECT id FROM profile_versions WHERE id = $1', [id]);
     if (versions.length === 0) {
@@ -198,6 +206,9 @@ export async function registerProfileRoutes(app: FastifyInstance): Promise<void>
   // POST /api/profile/versions/:id/activate — activa la versión (transacción).
   app.post('/api/profile/versions/:id/activate', mutating, async (req, reply) => {
     const { id } = req.params as { id: string };
+    if (!UUID_RE.test(id ?? '')) {
+      return reply.code(400).send({ error: 'version_invalida' });
+    }
     const activated = await withTransaction(async (client) => {
       const found = await client.query<VersionRow>(
         `SELECT id, version_no, status, source, notes, created_by, created_at

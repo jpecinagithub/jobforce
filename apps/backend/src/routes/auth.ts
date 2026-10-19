@@ -2,7 +2,8 @@
  * @jobforce/backend — Rutas de autenticación.
  *
  * - POST /api/auth/setup  → crea el usuario administrador (solo si no existe).
- * - POST /api/auth/login  → inicia sesión (rate limit: 10 intentos / 5 min por IP).
+ * - POST /api/auth/login  → inicia sesión (rate limit por IP: 10 intentos / 5 min
+ *   por defecto; configurable con LOGIN_RATE_LIMIT_MAX / LOGIN_RATE_LIMIT_WINDOW_MS).
  * - POST /api/auth/logout → cierra la sesión actual.
  * - GET  /api/auth/me     → devuelve el usuario de la sesión.
  *
@@ -97,14 +98,15 @@ export async function registerAuthRoutes(app: FastifyInstance, config: AppConfig
     }
   });
 
-  // POST /api/auth/login — inicio de sesión con rate limit por IP.
+  // POST /api/auth/login — inicio de sesión con rate limit por IP
+  // (configurable: LOGIN_RATE_LIMIT_MAX / LOGIN_RATE_LIMIT_WINDOW_MS).
   app.post(
     '/api/auth/login',
     {
       config: {
         rateLimit: {
-          max: 10,
-          timeWindow: '5 minutes',
+          max: config.loginRateLimitMax,
+          timeWindow: config.loginRateLimitWindowMs,
           keyGenerator: (req) => req.ip,
           // El plugin hace `throw` del valor devuelto: debe ser un Error con
           // statusCode 429 (un objeto plano lo convertiría en 500).

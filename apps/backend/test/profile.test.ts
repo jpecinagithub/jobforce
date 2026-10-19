@@ -252,4 +252,25 @@ describe('perfil', () => {
       }
     }
   });
+
+  it('POST /api/profile/versions/:id/activate con id malformado → 400 version_invalida', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/profile/versions/no-es-un-uuid/activate',
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 400);
+    assert.deepEqual(res.json(), { error: 'version_invalida' });
+  });
+
+  it('POST /api/profile/versions/:id/facts con id malformado → 400 version_invalida', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/profile/versions/123/facts',
+      headers: authed(auth),
+      payload: { category: 'x', key: 'y', value: 'z', source: 'manual' },
+    });
+    assert.equal(res.statusCode, 400);
+    assert.deepEqual(res.json(), { error: 'version_invalida' });
+  });
 });

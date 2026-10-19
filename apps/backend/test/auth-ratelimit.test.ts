@@ -1,6 +1,8 @@
 /**
  * Tests del rate limit del login: 10 intentos / 5 minutos por IP.
- * Fichero separado para que el contador por IP empiece limpio.
+ * Fichero separado para que el contador por IP empiece limpio, y con los
+ * valores estrictos de producción fijados explícitamente (el helper de tests
+ * relaja el límite por defecto para no interferir con los demás ficheros).
  */
 
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -12,7 +14,10 @@ describe('rate limit de /api/auth/login', () => {
   let app: FastifyInstance;
 
   before(async () => {
-    app = await buildTestApp();
+    app = await buildTestApp({
+      LOGIN_RATE_LIMIT_MAX: '10',
+      LOGIN_RATE_LIMIT_WINDOW_MS: String(5 * 60 * 1000),
+    });
   });
   beforeEach(async () => {
     await resetDb();
