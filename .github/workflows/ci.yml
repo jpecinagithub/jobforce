@@ -31,8 +31,9 @@ jobs:
           POSTGRES_USER: jobforce
           POSTGRES_PASSWORD: jobforce
           POSTGRES_DB: jobforce_test
-        ports:
-          - 5432:5432
+        # Sin "ports" fijo: GitHub asigna un puerto aleatorio del host
+        # (el 5432 fijo chocaba en el runner -> exit 125 al crear el contenedor).
+        # El puerto real se inyecta en DATABASE_URL con job.services.postgres.ports.
         options: >-
           --health-cmd pg_isready -U jobforce
           --health-interval 10s
@@ -59,5 +60,5 @@ jobs:
 
       - name: Tests
         env:
-          DATABASE_URL: <redacted>
+          DATABASE_URL: postgres://jobforce:jobforce@localhost:${{ job.services.postgres.ports[5432] }}/jobforce_test
         run: corepack pnpm -r --if-present test
