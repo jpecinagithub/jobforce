@@ -1,5 +1,6 @@
-import { apiGet, formatValue } from '@/lib/api';
+import { apiGet } from '@/lib/api';
 import ActivateVersionButton from '@/components/ActivateVersionButton';
+import FactValue from '@/components/FactValue';
 import type { ProfileResponse, ProfileVersion, ProfileFact } from '@jobforce/domain';
 
 export const dynamic = 'force-dynamic';
@@ -70,7 +71,7 @@ export default async function PerfilPage() {
                     {facts.map((fact) => (
                       <tr key={`${fact.category}:${fact.key}`}>
                         <td><code>{fact.key}</code></td>
-                        <td>{formatValue(fact.value)}</td>
+                        <td><FactValue value={fact.value} /></td>
                         <td className="muted">
                           {fact.source}
                           {fact.sourceDetail ? ` · ${fact.sourceDetail}` : ''}
