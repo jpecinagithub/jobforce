@@ -35,7 +35,7 @@ jobs:
         # (el 5432 fijo chocaba en el runner -> exit 125 al crear el contenedor).
         # El puerto real se inyecta en DATABASE_URL con job.services.postgres.ports.
         options: >-
-          --health-cmd pg_isready -U jobforce
+          --health-cmd "pg_isready -U jobforce"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
