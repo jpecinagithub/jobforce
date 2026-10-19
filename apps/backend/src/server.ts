@@ -17,6 +17,9 @@ import { registerProfileRoutes } from './routes/profile.js';
 import { registerCampaignRoutes } from './routes/campaigns.js';
 import { registerAnswerRoutes } from './routes/answers.js';
 import { registerConfigRoutes } from './routes/config.js';
+import { registerAutonomyRoutes } from './routes/autonomy.js';
+import { registerInterventionRoutes } from './routes/interventions.js';
+import { registerSendRoutes } from './routes/sends.js';
 
 export function buildServer(config: AppConfig): FastifyInstance {
   const app = Fastify({ logger: config.nodeEnv !== 'test' });
@@ -52,6 +55,9 @@ export function buildServer(config: AppConfig): FastifyInstance {
   app.register(async (instance) => registerCampaignRoutes(instance, config));
   app.register(registerAnswerRoutes);
   app.register(registerConfigRoutes);
+  app.register(registerAutonomyRoutes);
+  app.register(registerInterventionRoutes);
+  app.register(registerSendRoutes);
 
   return app;
 }

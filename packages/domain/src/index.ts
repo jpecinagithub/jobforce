@@ -309,3 +309,40 @@ export const DEFAULT_CRITERIA: CampaignCriteria = {
 export function defaultCriteria(): CampaignCriteria {
   return JSON.parse(JSON.stringify(DEFAULT_CRITERIA)) as CampaignCriteria;
 }
+
+// ---------------------------------------------------------------------------
+// Autonomía (Fase 4): contrato de tipos compartido con el motor (@jobforce/autonomy).
+// ---------------------------------------------------------------------------
+
+/** Modo operativo de la autonomía. */
+export type ModoAutonomia = 'investigar' | 'preparar_para_revision' | 'ejecutar_automatico';
+
+/** Reglas configurables de la política de autonomía. */
+export interface ReglasAutonomia {
+  portalesPermitidos: string[];
+  empresasExcluidas: string[];
+  umbralEncajeRevision: number;
+  umbralEncajeAutomatico: number;
+  maxEnviosPorDia: number;
+  maxEnviosPorSemana: number;
+  presupuestoMensualUsd: number;
+  presupuestoExaMensualUsd: number;
+  tratamientoDesconocidos: 'revision' | 'descartar';
+  crearCuentasPortales: boolean;
+}
+
+/** Política de autonomía versionada (la fila `policy` de `autonomy_policies`). */
+export interface PoliticaAutonomia {
+  version: number;
+  modoActivo: ModoAutonomia;
+  autorizacionEscrita: {
+    autorizadoPor: string;
+    autorizadoEn: string;
+    declaracion: string;
+  } | null;
+  paradaGlobal: boolean;
+  reglas: ReglasAutonomia;
+}
+
+/** Veredicto de una solicitud de envío. */
+export type DecisionEnvio = 'permitido' | 'requiere_revision' | 'bloqueado';

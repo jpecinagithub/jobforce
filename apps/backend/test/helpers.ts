@@ -42,8 +42,39 @@ export async function resetDb(): Promise<void> {
   await query(
     `TRUNCATE admin_users, user_sessions, profile_versions, profile_facts,
               answer_memory, configuration_versions, audit_events,
-              campaigns, searches, offers, evaluations, campaign_reports
+              campaigns, searches, offers, evaluations, campaign_reports,
+              applications, documents, gmail_sync_state, gmail_messages,
+              autonomy_policies, sends, send_locks, outbox, interventions,
+              portal_accounts, application_outcomes
      RESTART IDENTITY CASCADE`,
+  );
+  // La migración 004 siembra la política v1 como borrador; los tests parten
+  // de ese estado inicial conocido.
+  await query(
+    `INSERT INTO autonomy_policies (version, policy, authorized_by, authorized_at, global_stop, notes)
+     VALUES (
+       1,
+       '{
+         "version": 1,
+         "modoActivo": "preparar_para_revision",
+         "autorizacionEscrita": null,
+         "paradaGlobal": false,
+         "reglas": {
+           "portalesPermitidos": ["greenhouse", "lever", "personio"],
+           "empresasExcluidas": [],
+           "umbralEncajeRevision": 70,
+           "umbralEncajeAutomatico": 75,
+           "maxEnviosPorDia": 5,
+           "maxEnviosPorSemana": 20,
+           "presupuestoMensualUsd": 50,
+           "presupuestoExaMensualUsd": 3,
+           "tratamientoDesconocidos": "revision",
+           "crearCuentasPortales": false
+         }
+       }'::jsonb,
+       NULL, NULL, false,
+       'Borrador inicial de la política de autonomía (Fase 4).'
+     )`,
   );
 }
 
