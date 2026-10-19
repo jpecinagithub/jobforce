@@ -353,6 +353,10 @@ describe('rutas de Gmail', () => {
 });
 
 describe('cookie de sesión cross-site', () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
   it('con SESSION_COOKIE_SECURE=true la cookie es SameSite=None; Secure', async () => {
     const app = await buildTestApp({
       SESSION_COOKIE_SECURE: 'true',
