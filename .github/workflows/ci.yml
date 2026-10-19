@@ -61,4 +61,4 @@ jobs:
       - name: Tests
         env:
           DATABASE_URL: postgres://jobforce:jobforce@localhost:${{ job.services.postgres.ports[5432] }}/jobforce_test
-        run: corepack pnpm -r --if-present test
+        run: corepack pnpm -r --workspace-concurrency=1 --if-present test
