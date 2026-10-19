@@ -1,0 +1,51 @@
+{
+  "id": "6000000001496266",
+  "name": "Pharmacist Assistant",
+  "uuid": "d6b7bd44-99af-447a-9af3-dd6ed98cb3ff",
+  "refNumber": "SHGPS2200K01959",
+  "company": {
+    "name": "Siloam Hospitals Group",
+    "identifier": "SiloamCareers"
+  },
+  "location": {
+    "city": "Balikpapan, Kalimantan Timur",
+    "country": "id",
+    "remote": false,
+    "hybrid": false,
+    "fullLocation": "Balikpapan, Kalimantan Timur, , Indonesia"
+  },
+  "releasedDate": "2026-10-17T14:47:24.266Z",
+  "postingUrl": "https://jobs.smartrecruiters.com/SiloamCareers/6000000001496266-pharmacist-assistant",
+  "applyUrl": "https://jobs.smartrecruiters.com/SiloamCareers/6000000001496266-pharmacist-assistant?oga=true",
+  "referralUrl": "https://jobs.smartrecruiters.com/external-referrals/company/SiloamCareers/publication/d6b7bd44-99af-447a-9af3-dd6ed98cb3ff?dcr_ci=SiloamCareers",
+  "active": true,
+  "visibility": "PUBLIC",
+  "department": {
+    "id": 6000000000024242,
+    "label": "Medical"
+  },
+  "function": {
+    "id": "health_care_provider",
+    "label": "Health Care Provider"
+  },
+  "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+  },
+  "jobAd": {
+    "sections": {
+      "companyDescription": {
+        "title": "Company Description",
+        "text": ""
+      },
+      "jobDescription": {
+        "title": "Job Description",
+        "text": "<p>•Supporting pharmaceutical services in terms of receiving prescriptions, compounding and preparing medicines as well as distributing medicines in outpatient and inpatient pharmacy services to ensure that patient drug needs are met in accordance with service and quality standards set by the hospital</p><p>•Serving patients at the pharmacy counter according to the patient queue number related to "
+      },
+      "qualifications": {
+        "title": "Qualifications",
+        "text": "<p>•Minimum High School Graduate from Pharmacy</p><p>•Have minimum 1 year work experience in the same field</p><p>•Proficiency in pharmacy technology, including automated dispensing systems and electronic health records.</p><p>•High attention to detail for accurate medication preparation and documentation.</p><p>•Ability to manage multiple tasks, such as handling prescriptions and maintaining inve"
+      }
+    }
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "total": 2000,
+  "jobPostings": [
+    {
+      "title": "SDK Eth Software Engineer, Networking",
+      "externalPath": "/job/Israel-Tel-Aviv/SDK-Eth-Software-Engineer--Networking_JR2013956",
+      "locationsText": "2 Locations",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR2013956"
+      ]
+    },
+    {
+      "title": "Senior Network Engineer, System Verification",
+      "externalPath": "/job/Israel-Yokneam/Senior-Network-Engineer--System-Verification_JR2015123",
+      "locationsText": "Israel, Yokneam",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR2015123"
+      ]
+    },
+    {
+      "title": "System Software Architect, AI Hardware and Software Performance",
+      "externalPath": "/job/China-Shanghai/System-Software-Architect--AI-Hardware-and-Software-Performance_JR2027824",
+      "locationsText": "China, Shanghai",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR2027824"
+      ]
+    },
+    {
+      "title": "Senior AI Infra Test Development Engineer, SDET",
+      "externalPath": "/job/China-Shanghai/Senior-AI-Infra-Test-Development-Engineer--SDET_JR2027717",
+      "locationsText": "China, Shanghai",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR2027717"
+      ]
+    },
+    {
+      "title": "Senior AI Infra Test Development Engineer, SDET",
+      "externalPath": "/job/China-Shanghai/Senior-AI-Infra-Test-Development-Engineer--SDET_JR2027720",
+      "locationsText": "China, Shanghai",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "JR2027720"
+      ]
+    }
+  ],
+  "facets": [
+    {
+      "facetParameter": "jobFamilyGroup",
+      "descriptor": "Job Category",
+      "values": [
+        {
+          "descriptor": "Engineering",
+          "id": "0c40f6bd1d8f10ae43ffaefd46dc7e78",
+          "count": 1755
+        },
+        {
+          "descriptor": "Sales",
+          "id": "0c40f6bd1d8f10ae43ffcac5bbec7e90",
+          "count": 333
+        },
+        {
+          "descriptor": "Univ Employment",
+          "id": "0c40f6bd1d8f10ae43ffda1e8d447e94",
+          "count": 174
+        },
+        {
+          "descriptor": "Operations",
+          "id": "0c40f6bd1d8f10ae43ffc3fc7d8c7e8a",
+          "count": 116
+        },
+        {
+          "descriptor": "Program Manager",
+          "id": "0c40f6bd1d8f10ae43ffc668c6847e8c",
+          "count": 105
+        },
+        {
+          "descriptor": "Marketing",
+          "id": "0c40f6bd1d8f10ae43ffc19725ec7e88",
+          "count": 94
+        },
+        {
+          "descriptor": "IT - Information Technology",
+          "id": "0c40f6bd1d8f10ae43ffbd1459047e84",
+          "count": 44
+        },
+        {
+          "descriptor": "Research",
+          "id": "0c40f6bd1d8f10ae43ffc8817cf47e8e",
+          "count": 33
+        },
+        {
+          "descriptor": "Professional Services",
+          "id": "e8bdc341a93101bd5f4d2b0a1c005e36",
+          "count": 31
+        },
+        {
+          "descriptor": "Finance",
+          "id": "0c40f6bd1d8f10ae43ffb5dd06f47e7e",
+          "count": 30
+        },
+        {
+          "descriptor": "Business Development",
+          "id": "0c40f6bd1d8f10ae43ffac5fdfac7e76",
+          "count": 9
+        },
+        {
+          "descriptor": "Human Resources",
+          "id": "0c40f6bd1d8f10ae43ffbac3680c7e82",
+          "count": 6
+        },
+        {
+          "descriptor": "Legal",
+          "id": "0c40f6bd1d8f10ae43ffbf4412147e86",
+          "count": 4
+        },
+        {
+          "descriptor": "Facilities",
+          "id": "0c40f6bd1d8f10ae43ffb3a6aaac7e7c",
+          "count": 4
+        },
+        {
+          "descriptor": "Administration",
+          "id": "0c40f6bd1d8f10ae43ffaa1e1d6c7e74",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "facetParameter": "workerSubType",
+      "descriptor": "Job Type",
+      "values": [
+        {
+          "descriptor": "Regular Employee",
+          "id": "0c40f6bd1d8f10adf6dae161b1844a15",
+          "count": 2295
+        },
+        {
+          "descriptor": "Management",
+          "id": "0c40f6bd1d8f10adf6dae2cd57444a16",
+          "count": 202
+        },
+        {
+          "descriptor": "Intern (Fixed Term)",
+          "id": "0c40f6bd1d8f10adf6dae42e46d44a17",
+          "count": 172
+        },
+        {
+          "descriptor": "New College Graduate",
+          "id": "ab40a98049581037a3ada55b087049b7",
+          "count": 67
+        },
+        {
+          "descriptor": "Regular Employee (Fixed Term)",
+          "id": "cc40d60d614c01809d56fe967144ce2c",
+          "count": 2
+        },
+        {
+          "descriptor": "Academic (Fixed Term)",
+          "id": "ec9560ee6dc71001d6f3cf17ea640000",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

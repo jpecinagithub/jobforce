@@ -1,0 +1,87 @@
+{
+  "offset": 0,
+  "limit": 5,
+  "totalFound": 720,
+  "content": [
+    {
+      "id": "6000000001496266",
+      "name": "Pharmacist Assistant",
+      "uuid": "d6b7bd44-99af-447a-9af3-dd6ed98cb3ff",
+      "refNumber": "SHGPS2200K01959",
+      "company": {
+        "identifier": "SiloamCareers",
+        "name": "Siloam Hospitals Group"
+      },
+      "releasedDate": "2026-10-17T14:47:24.266Z",
+      "location": {
+        "city": "Balikpapan, Kalimantan Timur",
+        "country": "id",
+        "remote": false,
+        "hybrid": false,
+        "fullLocation": "Balikpapan, Kalimantan Timur, , Indonesia"
+      },
+      "department": {
+        "id": "6000000000024242",
+        "label": "Medical"
+      },
+      "function": {
+        "id": "health_care_provider",
+        "label": "Health Care Provider"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "not_applicable",
+        "label": "Not Applicable"
+      },
+      "visibility": "PUBLIC",
+      "language": {
+        "code": "en",
+        "label": "English",
+        "labelNative": "English (US)"
+      }
+    },
+    {
+      "id": "6000000001496243",
+      "name": "Physician Relation Executive",
+      "uuid": "a49be3aa-00ca-4cd4-954d-88bceb7d7396",
+      "refNumber": "SHGPS2200J01966",
+      "company": {
+        "identifier": "SiloamCareers",
+        "name": "Siloam Hospitals Group"
+      },
+      "releasedDate": "2026-10-17T14:46:46.011Z",
+      "location": {
+        "city": "Balikpapan, Kalimantan Timur",
+        "country": "id",
+        "remote": false,
+        "hybrid": false,
+        "fullLocation": "Balikpapan, Kalimantan Timur, , Indonesia"
+      },
+      "department": {
+        "id": "6000000000024191",
+        "label": "Strategy and Commercial"
+      },
+      "function": {
+        "id": "health_care_provider",
+        "label": "Health Care Provider"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "not_applicable",
+        "label": "Not Applicable"
+      },
+      "visibility": "PUBLIC",
+      "language": {
+        "code": "en",
+        "label": "English",
+        "labelNative": "English (US)"
+      }
+    }
+  ]
+}
