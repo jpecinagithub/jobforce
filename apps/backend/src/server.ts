@@ -22,6 +22,7 @@ import { registerInterventionRoutes } from './routes/interventions.js';
 import { registerSendRoutes } from './routes/sends.js';
 import { registerCostRoutes } from './routes/costs.js';
 import { registerGmailRoutes } from './routes/gmail.js';
+import { registerCodeChangeRoutes } from './routes/codechanges.js';
 
 export function buildServer(config: AppConfig): FastifyInstance {
   const app = Fastify({ logger: config.nodeEnv !== 'test' });
@@ -62,6 +63,7 @@ export function buildServer(config: AppConfig): FastifyInstance {
   app.register(registerSendRoutes);
   app.register(registerCostRoutes);
   app.register(async (instance) => registerGmailRoutes(instance, config));
+  app.register(registerCodeChangeRoutes);
 
   return app;
 }

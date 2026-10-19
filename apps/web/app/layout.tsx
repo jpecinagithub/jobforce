@@ -16,6 +16,7 @@ const NAV = [
   { href: '/respuestas', label: 'Respuestas' },
   { href: '/autonomia', label: 'Autonomía' },
   { href: '/intervenciones', label: 'Intervenciones' },
+  { href: '/cambios', label: 'Cambios' },
   { href: '/configuracion', label: 'Configuración' },
 ];
 
