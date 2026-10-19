@@ -19,6 +19,7 @@ import { registerAnswerRoutes } from './routes/answers.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerAutonomyRoutes } from './routes/autonomy.js';
 import { registerInterventionRoutes } from './routes/interventions.js';
+import { registerReviewRoutes } from './routes/review.js';
 import { registerSendRoutes } from './routes/sends.js';
 import { registerCostRoutes } from './routes/costs.js';
 import { registerGmailRoutes } from './routes/gmail.js';
@@ -59,6 +60,7 @@ export function buildServer(config: AppConfig): FastifyInstance {
   app.register(registerConfigRoutes);
   app.register(registerAutonomyRoutes);
   app.register(registerInterventionRoutes);
+  app.register(registerReviewRoutes);
   app.register(registerSendRoutes);
   app.register(registerCostRoutes);
   app.register(async (instance) => registerGmailRoutes(instance, config));

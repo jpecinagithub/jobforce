@@ -11,15 +11,18 @@ import {
 import type { Intervention } from '@/lib/autonomy';
 
 const INTERVENTIONS_ENDPOINTS_MSG =
-  'El backend aún no expone el endpoint de intervenciones (pendiente del worker 2, contrato de fase 4). ' +
-  'La bandeja aparecerá aquí cuando el backend esté listo.';
+  'El endpoint de intervenciones no está disponible en esta versión del backend. ' +
+  'La bandeja aparecerá aquí cuando esté listo.';
+
+// Fallback obsoleto: el endpoint YA existe (fase 4); solo se muestra si el
+// fetch devuelve 404 de verdad (versión antigua del backend en despliegue).
 
 function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind.replaceAll('_', ' ');
 }
 
 function statusBadgeClass(status: string): string {
-  if (status === 'pendiente') return 'badge pending';
+  if (status === 'abierta') return 'badge pending';
   if (status === 'resuelta') return 'badge active';
   if (status === 'descartada') return 'badge';
   return 'badge';
@@ -193,7 +196,7 @@ export default function InterventionsClient() {
                     </td>
                     <td>{formatDate(it.createdAt)}</td>
                     <td>
-                      {it.status === 'pendiente' ? (
+                      {it.status === 'abierta' ? (
                         <div className="resolve-form">
                           <input
                             type="text"
