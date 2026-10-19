@@ -177,3 +177,135 @@ export interface CreateAnswerRequest {
   scopeValue?: string;
   reuseRule?: ReuseRule;
 }
+
+// ---------------------------------------------------------------------------
+// Fase 2 — Campañas de búsqueda y evaluación
+// ---------------------------------------------------------------------------
+
+/** Tipos de requisito obligatorio en los criterios de una campaña. */
+export type MandatoryKind = 'role' | 'language' | 'location' | 'seniority' | 'keyword';
+
+/** Estado de un requisito obligatorio tras evaluar una oferta. */
+export type MandatoryState = 'cumple' | 'incumple' | 'sin_evidencia';
+
+/** Dimensiones de preferencia ponderada (pesos del plan de Fase 2). */
+export type PreferenceKey =
+  | 'funciones'
+  | 'competencias'
+  | 'seniority'
+  | 'ubicacion'
+  | 'condiciones'
+  | 'empresa';
+
+/** Requisito obligatorio de una campaña. `params` depende de `kind`:
+ *  role: { roles: string[] } · language: { languages: string[] }
+ *  location: { mode: 'remote_ok'|'onsite'|'any', countries: string[] }
+ *  seniority: { levels: string[] } · keyword: { any_of: string[], none_of?: string[] } */
+export interface MandatoryRequirement {
+  id: string;
+  kind: MandatoryKind;
+  description: string;
+  params: Record<string, unknown>;
+}
+
+/** Dimensión de preferencia: peso 0..100, descripción y palabras clave de evidencia. */
+export interface PreferenceDim {
+  weight: number;
+  description: string;
+  keywords: string[];
+}
+
+/** Criterios editables de una campaña (definidos en el front, por campaña). */
+export interface CampaignCriteria {
+  roles: string[];
+  mandatory: MandatoryRequirement[];
+  preferences: Record<PreferenceKey, PreferenceDim>;
+  queries: string[];
+  unknown_policy: 'conservative';
+}
+
+/** Campaña de búsqueda. */
+export interface Campaign {
+  id: string;
+  name: string;
+  criteria: CampaignCriteria;
+  exa_budget_cap_usd: number;
+  exa_spent_usd: number;
+  status: 'draft' | 'active' | 'archived';
+  created_at: string;
+  updated_at: string;
+  searches_count?: number;
+  offers_count?: number;
+}
+
+/** Criterios por defecto derivados del perfil de Jon (Fase 2). */
+export const DEFAULT_CRITERIA: CampaignCriteria = {
+  roles: ['CFO', 'Finance Manager', 'Controller'],
+  mandatory: [
+    {
+      id: 'rol',
+      kind: 'role',
+      description: 'Puesto senior en finanzas: CFO, Finance Manager, Controller o equivalente',
+      params: {
+        roles: ['cfo', 'finance manager', 'controller', 'finance director', 'head of finance'],
+      },
+    },
+    {
+      id: 'ingles',
+      kind: 'language',
+      description: 'Inglés como idioma de trabajo o requisito',
+      params: { languages: ['english', 'inglés', 'ingles'] },
+    },
+    {
+      id: 'ubicacion',
+      kind: 'location',
+      description: 'Remoto o con base en España/UE; expatriación valorada',
+      params: {
+        mode: 'remote_ok',
+        countries: [
+          'spain', 'españa', 'netherlands', 'germany', 'france', 'portugal',
+          'ireland', 'remote', 'remoto',
+        ],
+      },
+    },
+  ],
+  preferences: {
+    funciones: {
+      weight: 30,
+      description: 'Contabilidad, reporting IFRS, consolidación, tesorería, control de gestión',
+      keywords: ['accounting', 'contabilidad', 'ifrs', 'reporting', 'consolidation', 'consolidación', 'treasury', 'tesorería', 'controlling', 'forecast', 'budget'],
+    },
+    competencias: {
+      weight: 25,
+      description: 'ERP (SAP, Oracle, NetSuite), Power BI, Excel avanzado, SQL',
+      keywords: ['sap', 'oracle', 'netsuite', 'erp', 'power bi', 'excel', 'sql'],
+    },
+    seniority: {
+      weight: 15,
+      description: 'Nivel senior / dirección',
+      keywords: ['senior', 'director', 'head', 'vp', 'vice president', 'c-level', 'lead'],
+    },
+    ubicacion: {
+      weight: 15,
+      description: 'Remoto o España; expatriación valorada',
+      keywords: ['remote', 'remoto', 'spain', 'españa', 'relocation', 'expat'],
+    },
+    condiciones: {
+      weight: 10,
+      description: 'Salario, contrato indefinido',
+      keywords: ['salary', 'salario', 'permanent', 'indefinido', 'compensation'],
+    },
+    empresa: {
+      weight: 5,
+      description: 'Multinacional, sector industrial o servicios',
+      keywords: ['multinational', 'multinacional', 'group', 'global'],
+    },
+  },
+  queries: [],
+  unknown_policy: 'conservative',
+};
+
+/** Copia profunda de los criterios por defecto (para nuevas campañas). */
+export function defaultCriteria(): CampaignCriteria {
+  return JSON.parse(JSON.stringify(DEFAULT_CRITERIA)) as CampaignCriteria;
+}
