@@ -14,6 +14,7 @@
 | Detalle de oferta | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 |
 | Detectar cierre / vigencia | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 |
 | URL de aplicación | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 | ✅ 19-oct-2026 |
+| Cliente tipado en `@jobforce/connectors` | ✅ F4 | ✅ F4 | ✅ F4 | ✅ **F6 (19-oct-2026)** | ❌ solo probado | n/a (driver Playwright) |
 | Auto-relleno asistido (Playwright) | ❌ no probado | ❌ no probado | ❌ no probado | ❌ no probado | ❌ no probado | ✅ 19-oct-2026 |
 | Envío | ❌ solo lectura | ❌ solo lectura | ❌ solo lectura | ❌ no probado | ❌ no probado | ✅ 19-oct-2026 (con aprobación) |
 

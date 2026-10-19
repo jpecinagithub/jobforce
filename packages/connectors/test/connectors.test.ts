@@ -37,6 +37,13 @@ import {
   WorkdayNotFoundError,
   createWorkdayClient,
   createAshbyClient,
+  greenhouseBoardUrl,
+  greenhouseJobDetailUrl,
+  greenhouseJobPageUrl,
+  parseGreenhouseBoard,
+  parseGreenhouseJob,
+  GreenhouseNotFoundError,
+  createGreenhouseClient,
 } from '../src/index.js';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -290,5 +297,91 @@ describe('Workday: cliente con fetch stub', () => {
       () => client.listJobs({ tenant: '', wdHost: 'wd5', site: 'X' }),
       /`tenant` es obligatorio/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Greenhouse
+// ---------------------------------------------------------------------------
+
+describe('Greenhouse: construcción de URLs', () => {
+  it('el listado usa el board token', () => {
+    assert.equal(
+      greenhouseBoardUrl({ boardToken: 'okx' }),
+      'https://boards-api.greenhouse.io/v1/boards/okx/jobs',
+    );
+  });
+
+  it('el detalle añade ?content=true', () => {
+    assert.equal(
+      greenhouseJobDetailUrl('okx', 7608993003),
+      'https://boards-api.greenhouse.io/v1/boards/okx/jobs/7608993003?content=true',
+    );
+  });
+
+  it('la página pública sigue el patrón job-boards.greenhouse.io', () => {
+    assert.equal(
+      greenhouseJobPageUrl('okx', 7608993003),
+      'https://job-boards.greenhouse.io/okx/jobs/7608993003',
+    );
+  });
+});
+
+describe('Greenhouse: parseo de fixtures reales (19-oct-2026, board okx)', () => {
+  it('el listado parsea id, título, url y ubicación', () => {
+    const jobs = parseGreenhouseBoard(loadFixture('greenhouse-board.json'));
+    assert.ok(jobs.length > 0);
+    const [first] = jobs;
+    assert.equal(typeof first.id, 'number');
+    assert.ok(first.title.length > 0);
+    assert.ok(first.absoluteUrl.startsWith('https://job-boards.greenhouse.io/'));
+    assert.equal(typeof first.locationName, 'string');
+  });
+
+  it('el detalle trae content, departamentos y oficinas', () => {
+    const job = parseGreenhouseJob(loadFixture('greenhouse-job-detail.json'));
+    assert.ok(job.content != null && job.content.length > 0);
+    assert.ok(job.departments.length > 0);
+    assert.ok(job.offices.length > 0);
+  });
+
+  it('lanza si la forma no es la esperada', () => {
+    assert.throws(() => parseGreenhouseBoard({}), /`jobs`/);
+    assert.throws(() => parseGreenhouseJob({}), /`id`/);
+    assert.throws(() => parseGreenhouseJob(null), /objeto JSON/);
+  });
+});
+
+describe('Greenhouse: cliente con fetch simulado', () => {
+  it('listJobs exige boardToken', async () => {
+    const client = createGreenhouseClient(async () => {
+      throw new Error('no debería llamarse');
+    });
+    await assert.rejects(() => client.listJobs({ boardToken: '  ' }), /boardToken/);
+  });
+
+  it('getJob exige jobId entero positivo', async () => {
+    const client = createGreenhouseClient(async () => {
+      throw new Error('no debería llamarse');
+    });
+    await assert.rejects(() => client.getJob('okx', 0), /jobId/);
+  });
+
+  it('un 404 se convierte en GreenhouseNotFoundError', async () => {
+    const client = createGreenhouseClient((async () =>
+      new Response('{}', { status: 404 })) as typeof fetch);
+    await assert.rejects(
+      () => client.getJob('okx', 1),
+      (err: unknown) => err instanceof GreenhouseNotFoundError,
+    );
+  });
+
+  it('listJobs parsea la respuesta del fetch', async () => {
+    const fixture = loadFixture('greenhouse-board.json');
+    const client = createGreenhouseClient((async () =>
+      new Response(JSON.stringify(fixture), { status: 200 })) as typeof fetch);
+    const jobs = await client.listJobs({ boardToken: 'okx' });
+    assert.ok(jobs.length > 0);
+    assert.equal(jobs[0].id, (fixture as { jobs: { id: number }[] }).jobs[0].id);
   });
 });
