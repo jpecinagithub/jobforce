@@ -391,3 +391,43 @@ pre.json {
 @media (max-width: 560px) { .filters { grid-template-columns: 1fr; } }
 
 .resolve-form input[type="text"] { max-width: 260px; margin-bottom: 0.5rem; }
+
+/* Modal de confirmación (estilo Atlas) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 14, 0.72);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 100;
+}
+.modal-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.75rem;
+  max-width: 480px;
+  width: 100%;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+.modal-body p {
+  margin: 0 0 0.75rem;
+  color: var(--text);
+}
+.modal-body .declaracion {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 8px 8px 0;
+  color: var(--text);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}

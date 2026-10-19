@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '@/lib/auth';
+import ConfirmModal from '@/components/ConfirmModal';
+import type { Confirmacion } from '@/components/ConfirmModal';
 
 type Estado = 'borrador' | 'en_desarrollo' | 'en_revision' | 'aprobada' | 'publicada' | 'revertida';
 type Componente = 'frontend' | 'backend' | 'ambos';
@@ -184,6 +186,7 @@ export default function CodeChangesClient() {
   const [declaracion, setDeclaracion] = useState('');
   const [commit, setCommit] = useState('');
   const [motivo, setMotivo] = useState('');
+  const [confirmacion, setConfirmacion] = useState<Confirmacion | null>(null);
 
   useEffect(() => {
     if (detalle) {
@@ -242,19 +245,26 @@ export default function CodeChangesClient() {
       setError('Escribe la declaración de autorización.');
       return;
     }
-    const confirmado = window.confirm(
-      'Vas a autorizar la publicación de este cambio.\n\n' +
-        'Declaración que quedará firmada y auditada:\n\n' +
-        `«${texto}»\n\n¿Confirmas?`,
-    );
-    if (!confirmado) return;
-    await mutar('aprobar', () =>
-      fetch(`/api/code-changes/${detalle.id}/approve`, {
-        method: 'POST',
-        headers: mutatingHeaders(),
-        body: JSON.stringify({ declaracion: texto }),
-      }),
-    );
+    const id = detalle.id;
+    setConfirmacion({
+      titulo: 'Autorizar publicación',
+      cuerpo: (
+        <>
+          <p>Vas a autorizar la publicación de este cambio.</p>
+          <p className="muted">Declaración que quedará firmada y auditada:</p>
+          <blockquote className="declaracion">«{texto}»</blockquote>
+        </>
+      ),
+      textoConfirmar: 'Autorizar',
+      onConfirm: () =>
+        mutar('aprobar', () =>
+          fetch(`/api/code-changes/${id}/approve`, {
+            method: 'POST',
+            headers: mutatingHeaders(),
+            body: JSON.stringify({ declaracion: texto }),
+          }),
+        ),
+    });
   }
 
   async function onPublicar(e: FormEvent) {
@@ -288,18 +298,31 @@ export default function CodeChangesClient() {
         : detalle.componente === 'frontend'
           ? 'El frontal se revertirá al despliegue de producción anterior de Vercel (paso manual de un clic en el dashboard, con instrucciones).'
           : 'El backend volverá al último despliegue anterior en Oracle (la base de datos NO se toca) y el frontal al despliegue de producción anterior de Vercel (paso manual en el dashboard).';
-    const confirmado = window.confirm(
-      `Vas a revertir «${detalle.titulo}».\n\n${queHara}\n\nMotivo: ${m}\n\n¿Confirmas?`,
-    );
-    if (!confirmado) return;
-    await mutar(
-      'revertir',
-      () =>
-        fetch(`/api/code-changes/${detalle.id}/revert`, {
-          method: 'POST',
-          headers: mutatingHeaders(),
-          body: JSON.stringify({ motivo: m }),
-        }),
+    const id = detalle.id;
+    const titulo = detalle.titulo;
+    setConfirmacion({
+      titulo: 'Revertir cambio',
+      cuerpo: (
+        <>
+          <p>
+            Vas a revertir <strong>«{titulo}»</strong>.
+          </p>
+          <p className="muted">{queHara}</p>
+          <p>
+            Motivo: <strong>{m}</strong>
+          </p>
+        </>
+      ),
+      textoConfirmar: 'Revertir',
+      onConfirm: () =>
+        mutar(
+          'revertir',
+          () =>
+            fetch(`/api/code-changes/${id}/revert`, {
+              method: 'POST',
+              headers: mutatingHeaders(),
+              body: JSON.stringify({ motivo: m }),
+            }),
       async (id) => {
         // El revert trabaja en segundo plano: sondea hasta que termine.
         for (let i = 0; i < 60; i++) {
@@ -311,8 +334,9 @@ export default function CodeChangesClient() {
           if (d.revert_estado !== 'en_curso') break;
         }
         await cargarLista();
-      },
-    );
+        },
+      ),
+    });
   }
 
   if (loading) return <p className="muted">Cargando cambios…</p>;
@@ -589,6 +613,7 @@ export default function CodeChangesClient() {
           )}
         </section>
       </div>
+      <ConfirmModal confirmacion={confirmacion} onClose={() => setConfirmacion(null)} />
     </div>
   );
 }

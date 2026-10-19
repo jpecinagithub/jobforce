@@ -68,9 +68,14 @@ export default async function HomePage() {
           No se pudieron cargar las respuestas: {answers.message}
         </div>
       )}
-      {!configOk && (
+      {(!configOk && config.status !== 404) && (
         <div className="notice" style={{ marginTop: '1.5rem' }}>
           No se pudo cargar la configuración: {config.message}
+        </div>
+      )}
+      {!configOk && config.status === 404 && (
+        <div className="notice" style={{ marginTop: '1.5rem' }}>
+          Aún no hay ninguna versión de configuración guardada (se creará al publicar el primer cambio desde /cambios).
         </div>
       )}
     </>
