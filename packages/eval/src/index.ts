@@ -292,6 +292,63 @@ function matchRole(req: MandatoryRequirement, offer: EvalOfferInput, corpus: str
   return { requisito_id: req.id, descripcion: req.description, estado: 'sin_evidencia', evidencia: '' };
 }
 
+/**
+ * Palabras funcionales por idioma para detectar en qué lengua está
+ * redactada una oferta. Se cuentan palabras DISTINTAS presentes en el
+ * corpus (título + extractos, ya normalizado).
+ */
+const STOPWORDS: Record<string, string[]> = {
+  en: ['the', 'and', 'with', 'for', 'you', 'your', 'our', 'will', 'are', 'this', 'that', 'have', 'has', 'who', 'what', 'when', 'where', 'they', 'their', 'from', 'about', 'into', 'over', 'after', 'before', 'between', 'through', 'working', 'experience', 'responsibilities', 'requirements', 'opportunity', 'looking', 'join', 'team', 'role', 'work'],
+  es: ['los', 'las', 'una', 'del', 'que', 'con', 'para', 'por', 'como', 'más', 'este', 'esta', 'son', 'sobre', 'también', 'hasta', 'desde', 'donde', 'cuando', 'muy', 'sin', 'sus', 'empresa', 'años', 'equipo', 'trabajo'],
+  de: ['der', 'die', 'das', 'und', 'mit', 'für', 'von', 'den', 'ist', 'ein', 'eine', 'im', 'sich', 'auf', 'werden', 'aus', 'wir', 'sie', 'bei', 'einer', 'einem', 'einen', 'als', 'auch', 'nach', 'und', 'unsere', 'unser', 'oder'],
+  fr: ['les', 'des', 'une', 'dans', 'pour', 'qui', 'que', 'est', 'sur', 'avec', 'aux', 'par', 'pas', 'vous', 'nous', 'être', 'sont', 'ces', 'au', 'ou', 'être'],
+  nl: ['het', 'een', 'van', 'dat', 'die', 'zijn', 'voor', 'met', 'aan', 'tot', 'ook', 'als', 'bij', 'naar', 'je', 'wij', 'er', 'om', 'op'],
+  it: ['il', 'lo', 'che', 'una', 'per', 'con', 'del', 'sono', 'delle', 'dei', 'gli', 'nella', 'nel', 'alla', 'come', 'si', 'da', 'su'],
+  pt: ['os', 'as', 'em', 'do', 'da', 'dos', 'das', 'para', 'com', 'uma', 'que', 'por', 'ao', 'são', 'como', 'mais', 'na', 'no', 'nas', 'nos'],
+};
+
+function distinctStopwords(corpus: string, words: string[]): number {
+  const tokens = new Set(corpus.split(/[^a-z]+/).filter(Boolean));
+  let n = 0;
+  for (const w of words) if (tokens.has(w)) n++;
+  return n;
+}
+
+/**
+ * ¿Está el texto redactado en inglés? Regla de Jon (20-oct-2026): «todas
+ * las ofertas en las que aplico están en inglés» — si el anuncio está
+ * escrito en inglés, el idioma de trabajo es inglés aunque nunca nombre
+ * la palabra «English». Detección conservadora: muchas palabras
+ * funcionales inglesas distintas y dominio claro (más del doble que
+ * cualquier otro idioma detectado).
+ */
+function corpusIsEnglish(corpus: string): boolean {
+  const en = distinctStopwords(corpus, STOPWORDS['en']);
+  if (en < 8) return false;
+  let maxOther = 0;
+  for (const lang of Object.keys(STOPWORDS)) {
+    if (lang === 'en') continue;
+    maxOther = Math.max(maxOther, distinctStopwords(corpus, STOPWORDS[lang]));
+  }
+  return en > 2 * maxOther;
+}
+
+/** La frase de la oferta con más señal de inglés (para citarla como evidencia). */
+function englishEvidence(offer: EvalOfferInput): string {
+  const sources = [offer.title, ...offer.highlights];
+  let best = '';
+  let bestScore = -1;
+  for (const s of sources) {
+    const score = distinctStopwords(norm(s), STOPWORDS['en']);
+    if (score > bestScore) {
+      bestScore = score;
+      best = s;
+    }
+  }
+  const clean = best.replace(/\s+/g, ' ').trim();
+  return clean.length > 200 ? clean.slice(0, 200) : clean;
+}
+
 function matchLanguage(req: MandatoryRequirement, offer: EvalOfferInput, corpus: string): MandatoryDetail {
   const languages = (req.params['languages'] as string[] | undefined) ?? [];
   const found = includesAny(corpus, languages);
@@ -301,6 +358,17 @@ function matchLanguage(req: MandatoryRequirement, offer: EvalOfferInput, corpus:
       descripcion: req.description,
       estado: 'cumple',
       evidencia: findEvidence(offer, found),
+    };
+  }
+  // Sin mención literal: si se pide inglés y la oferta ESTÁ REDACTADA en
+  // inglés, el requisito se cumple (decisión expresa de Jon, 20-oct-2026).
+  const wantsEnglish = languages.some((l) => ['english', 'inglés', 'ingles', 'en'].includes(norm(l)));
+  if (wantsEnglish && corpusIsEnglish(corpus)) {
+    return {
+      requisito_id: req.id,
+      descripcion: req.description,
+      estado: 'cumple',
+      evidencia: englishEvidence(offer),
     };
   }
   return { requisito_id: req.id, descripcion: req.description, estado: 'sin_evidencia', evidencia: '' };

@@ -257,6 +257,56 @@ describe('evaluateOffer', () => {
     assert.equal(locDe?.estado, 'cumple');
   });
 
+  it('idioma: oferta redactada en inglés cumple aunque no diga «English» (regla de Jon)', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Finance Manager',
+        url: 'https://example.com/jobs/en',
+        highlights: [
+          'Finance Manager to lead our finance team in Berlin, Germany. You will be responsible for the monthly closing and reporting, working with our business partners across the group. We are looking for someone with strong experience in accounting who will support the team and drive improvements in our processes.',
+        ],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ing?.estado, 'cumple');
+    assert.ok(ing && ing.evidencia.length > 0);
+    assert.equal(res.mandatory_verdict, 'cumple');
+  });
+
+  it('idioma: oferta redactada en español sin nombrar el inglés → sin_evidencia', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Responsable de Finanzas',
+        url: 'https://example.com/jobs/es',
+        highlights: [
+          'Responsable de finanzas para liderar el equipo en Madrid. Serás responsable del cierre mensual y de la elaboración de informes, trabajando con todas las áreas de la empresa. Buscamos una persona con experiencia en contabilidad que quiera crecer con nosotros.',
+        ],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ing?.estado, 'sin_evidencia');
+  });
+
+  it('idioma: oferta redactada en alemán → sin_evidencia de inglés', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Finanzmanager',
+        url: 'https://example.com/jobs/de',
+        highlights: [
+          'Finanzmanager für unser Team in München. Sie sind verantwortlich für den Monatsabschluss und die Berichterstattung und arbeiten mit allen Bereichen des Unternehmens zusammen. Wir suchen eine Persönlichkeit mit Erfahrung im Rechnungswesen.',
+        ],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ing?.estado, 'sin_evidencia');
+  });
+
   it('la evidencia nunca supera los 200 caracteres', () => {
     const long = `CFO needed. ${'x'.repeat(500)} English required. ${'y'.repeat(500)}`;
     const res = evaluateOffer(
