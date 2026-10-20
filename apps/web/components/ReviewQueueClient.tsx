@@ -9,7 +9,7 @@ import {
   VERDICT_LABELS,
   verdictBadgeClass,
 } from '@/lib/review';
-import type { ReviewQueueItem, BatchResponse } from '@/lib/review';
+import type { ReviewQueueItem, BatchResponse, ApproveResponse } from '@/lib/review';
 
 /**
  * Cola de revisión (Fase 6.1): candidaturas en `ready_for_review` con resumen
@@ -28,6 +28,7 @@ export default function ReviewQueueClient() {
   const [rejectReason, setRejectReason] = useState('');
   const [batchReason, setBatchReason] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionInfo, setActionInfo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -59,6 +60,7 @@ export default function ReviewQueueClient() {
 
   async function approveOne(id: string) {
     setActionError(null);
+    setActionInfo(null);
     setBusy(true);
     try {
       const res = await fetch(`/api/applications/${encodeURIComponent(id)}/approve`, {
@@ -66,7 +68,18 @@ export default function ReviewQueueClient() {
         headers: mutatingHeaders(),
       });
       if (!res.ok) throw new Error(await parseApiError(res));
+      const body = (await res.json()) as ApproveResponse;
       removeItems([id]);
+      if (body.send?.send === 'encolado') {
+        setActionInfo('Candidatura aprobada: envío encolado. El worker lo enviará en breve.');
+      } else if (body.send?.send === 'bloqueado') {
+        setActionInfo(
+          `Candidatura aprobada, pero el envío quedó bloqueado: ${body.send.motivo ?? 'la política no lo permite'}. ` +
+            'Queda registrado en Intervenciones.',
+        );
+      } else {
+        setActionInfo('Candidatura aprobada.');
+      }
     } catch (e) {
       setActionError(e instanceof Error ? e.message : 'No se pudo aprobar.');
     } finally {
@@ -76,6 +89,7 @@ export default function ReviewQueueClient() {
 
   async function rejectOne(id: string, reason: string) {
     setActionError(null);
+    setActionInfo(null);
     setBusy(true);
     try {
       const res = await fetch(`/api/applications/${encodeURIComponent(id)}/reject`, {
@@ -102,6 +116,7 @@ export default function ReviewQueueClient() {
       return;
     }
     setActionError(null);
+    setActionInfo(null);
     setBusy(true);
     try {
       const res = await fetch('/api/applications/review-batch', {
@@ -117,6 +132,24 @@ export default function ReviewQueueClient() {
       const body = (await res.json()) as BatchResponse;
       const okIds = body.items.filter((i) => i.ok).map((i) => i.id);
       removeItems(okIds);
+      if (action === 'approve') {
+        const encolados = body.items.filter((i) => i.ok && i.send?.send === 'encolado').length;
+        const bloqueados = body.items.filter((i) => i.ok && i.send?.send === 'bloqueado');
+        if (encolados > 0 || bloqueados.length > 0) {
+          setActionInfo(
+            `Lote aprobado: ${encolados} envío(s) encolado(s)` +
+              (bloqueados.length > 0
+                ? `; ${bloqueados.length} aprobado(s) con el envío bloqueado: ` +
+                  bloqueados
+                    .map((b) => `${b.id.slice(0, 8)} (${b.send?.motivo ?? 'política'})`)
+                    .join(', ') +
+                  '. Quedan registrados en Intervenciones.'
+                : '.'),
+          );
+        } else if (okIds.length > 0) {
+          setActionInfo(`Lote aprobado: ${okIds.length} candidatura(s).`);
+        }
+      }
       const failed = body.items.filter((i) => !i.ok);
       if (failed.length > 0) {
         setActionError(
@@ -155,6 +188,7 @@ export default function ReviewQueueClient() {
   return (
     <>
       {actionError && <div className="error" role="alert">{actionError}</div>}
+      {actionInfo && <div className="notice" role="status">{actionInfo}</div>}
 
       {items.length === 0 ? (
         <div className="notice">No hay candidaturas pendientes de revisión. Buen trabajo.</div>

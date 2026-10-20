@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { apiGet } from '@/lib/api';
+import PrepareApplication from '@/components/PrepareApplication';
 import {
   PREFERENCE_LABELS,
   toNumber,
@@ -91,6 +92,14 @@ export default async function OfferDetailPage({
       ) : (
         <div className="notice">Esta oferta aún no tiene evaluación.</div>
       )}
+
+      <h2>Candidatura</h2>
+      <PrepareApplication
+        campaignId={id}
+        offerId={offerId}
+        application={offer.application ?? null}
+        hasEvaluation={evaluation !== null}
+      />
 
       <h2>Fragmentos destacados</h2>
       {offer.highlights.length === 0 ? (

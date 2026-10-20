@@ -45,6 +45,21 @@ export interface BatchItemResult {
   ok: boolean;
   error?: string;
   status?: string;
+  /** Resultado del encadenado aprobación → envío (Fase 7), solo al aprobar. */
+  send?: SendChainResult;
+}
+
+/** Resultado del encadenado aprobación → envío devuelto por approve (Fase 7). */
+export interface SendChainResult {
+  send: 'encolado' | 'bloqueado';
+  motivo?: string;
+}
+
+/** Respuesta de POST /api/applications/:id/approve (Fase 7: con encadenado). */
+export interface ApproveResponse {
+  ok: boolean;
+  application: { id: string; status: string };
+  send?: SendChainResult;
 }
 
 export interface BatchResponse {

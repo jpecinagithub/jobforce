@@ -122,6 +122,8 @@ export interface OfferSummary {
   url: string;
   /** null = sin comprobar; true = viva; false = rota. */
   url_ok: boolean | null;
+  /** Candidatura enlazada (Fase 7), si ya se preparó una para esta oferta. */
+  application: { id: string; status: string } | null;
   canonical_url: string;
   published_date: string | null;
   retrieved_at: string;
@@ -130,6 +132,29 @@ export interface OfferSummary {
     score: number | null;
     breakdown: DimensionScore[];
   } | null;
+}
+
+/** Etiquetas legibles del estado de una candidatura (Fase 7). */
+export const APPLICATION_STATUS_LABELS: Record<string, string> = {
+  draft: 'Borrador',
+  documents_ready: 'Documentos listos',
+  form_prepared: 'Formulario preparado',
+  ready_for_review: 'En revisión',
+  approved: 'Aprobada',
+  submitting: 'Enviando…',
+  submitted: 'Enviada',
+  submission_failed: 'Envío fallido',
+  withdrawn: 'Retirada',
+};
+
+/** Clase de badge según el estado de la candidatura. */
+export function applicationBadgeClass(status: string): string {
+  if (status === 'submitted') return 'badge active';
+  if (status === 'submission_failed') return 'badge danger';
+  if (status === 'approved' || status === 'ready_for_review' || status === 'submitting') {
+    return 'badge pending';
+  }
+  return 'badge';
 }
 
 /** Oferta completa de GET /api/campaigns/:id/offers/:offerId (contrato §6). */

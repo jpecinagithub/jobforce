@@ -5,6 +5,8 @@ import CriteriaEditor from '@/components/CriteriaEditor';
 import SearchLauncher from '@/components/SearchLauncher';
 import ReportViewer from '@/components/ReportViewer';
 import {
+  APPLICATION_STATUS_LABELS,
+  applicationBadgeClass,
   fmtUsd,
   statusBadgeClass,
   STATUS_LABELS,
@@ -122,6 +124,7 @@ export default async function CampaignDetailPage({
               <th>Empresa</th>
               <th>Veredicto</th>
               <th>Puntuación</th>
+              <th>Candidatura</th>
               <th></th>
             </tr>
           </thead>
@@ -158,6 +161,15 @@ export default async function CampaignDetailPage({
                     )}
                   </td>
                   <td>{score === null ? '—' : score.toFixed(2)}</td>
+                  <td>
+                    {o.application ? (
+                      <span className={applicationBadgeClass(o.application.status)}>
+                        {APPLICATION_STATUS_LABELS[o.application.status] ?? o.application.status}
+                      </span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
                   <td>
                     <Link href={`/campanas/${campaign.id}/ofertas/${o.id}`}>Ver</Link>
                   </td>
