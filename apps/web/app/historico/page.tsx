@@ -14,7 +14,7 @@ export default function HistoricoPage() {
       <p className="muted">
         Todas tus candidaturas, de la más reciente a la más antigua: a qué empresa,
         con qué nota, por qué canal y cuándo se aplicó. Desde aquí puedes bajar
-        el CV y la carta exactos de cada una.
+        el CV exacto que se envió en cada una.
       </p>
       <HistoryClient />
     </>

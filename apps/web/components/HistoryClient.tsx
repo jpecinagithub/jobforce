@@ -64,7 +64,7 @@ export default function HistoryClient() {
           <th>Nota</th>
           <th>Canal</th>
           <th>Estado</th>
-          <th>Documentos</th>
+          <th>CV</th>
         </tr>
       </thead>
       <tbody>
@@ -91,21 +91,19 @@ export default function HistoryClient() {
             </td>
             <td>{APPLICATION_STATUS_LABELS[it.status] ?? it.status}</td>
             <td>
-              {it.documents.length === 0 ? (
-                '—'
-              ) : (
-                <span style={{ display: 'inline-flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                  {it.documents.map((d) => (
-                    <a
-                      key={d.id}
-                      className="btn btn-ghost btn-small"
-                      href={`/api/documents/${d.id}/download`}
-                    >
-                      {docLabel(d.kind, d.format)}
-                    </a>
-                  ))}
-                </span>
-              )}
+              {/* Solo el CV (decisión de Jon, 20-oct-2026): la carta no se
+                  muestra en el histórico aunque exista el documento. */}
+              {(() => {
+                const cv = it.documents.find((d) => d.kind === 'cv' && d.format === 'pdf')
+                  ?? it.documents.find((d) => d.kind === 'cv');
+                return cv ? (
+                  <a className="btn btn-ghost btn-small" href={`/api/documents/${cv.id}/download`}>
+                    {docLabel(cv.kind, cv.format)}
+                  </a>
+                ) : (
+                  '—'
+                );
+              })()}
             </td>
           </tr>
         ))}
