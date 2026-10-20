@@ -167,7 +167,7 @@ export default function GoogleOAuthSection() {
       </p>
       <p>
         <code>{data.redirectUri}</code>{' '}
-        <button type="button" onClick={() => void copyRedirectUri(data.redirectUri)}>
+        <button type="button" className="btn btn-small btn-ghost" onClick={() => void copyRedirectUri(data.redirectUri)}>
           {copied ? 'Copiada ✓' : 'Copiar'}
         </button>
       </p>
@@ -211,7 +211,7 @@ export default function GoogleOAuthSection() {
             disabled={!data.encryptionConfigured || saving}
           />
         </div>
-        <button type="submit" disabled={!data.encryptionConfigured || saving}>
+        <button type="submit" className="btn btn-primary" disabled={!data.encryptionConfigured || saving}>
           {saving ? 'Guardando…' : 'Guardar credenciales'}
         </button>
       </form>
@@ -243,13 +243,14 @@ export default function GoogleOAuthSection() {
       <p>
         <button
           type="button"
+          className="btn btn-primary"
           onClick={() => void onConnect()}
           disabled={!data.client.configured || data.oauth.connected}
         >
           Conectar con Google
         </button>{' '}
         {data.oauth.connected && (
-          <button type="button" onClick={() => void onRevoke()}>
+          <button type="button" className="btn btn-danger" onClick={() => void onRevoke()}>
             Revocar conexión
           </button>
         )}

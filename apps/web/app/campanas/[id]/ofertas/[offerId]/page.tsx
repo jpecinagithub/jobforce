@@ -14,6 +14,20 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Los highlights de Exa vienen con markdown (#, **…**). Se muestra el
+ * texto limpio sin renderizar HTML (sin riesgo de inyección).
+ */
+function cleanHighlight(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .trim();
+}
+
 interface OfferDetailResponse {
   offer: OfferDetail;
   evaluation: EvaluationResult | null;
@@ -84,7 +98,7 @@ export default async function OfferDetailPage({
       ) : (
         <ul>
           {offer.highlights.map((h, i) => (
-            <li key={i} style={{ marginBottom: '0.5rem' }}>«{h}»</li>
+            <li key={i} style={{ marginBottom: '0.5rem' }}>«{cleanHighlight(h)}»</li>
           ))}
         </ul>
       )}

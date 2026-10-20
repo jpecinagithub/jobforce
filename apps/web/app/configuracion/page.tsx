@@ -13,7 +13,14 @@ export default async function ConfiguracionPage() {
       <p className="muted">Versión actual de la configuración (solo lectura).</p>
 
       {!config.ok ? (
-        <div className="error" role="alert">{config.message}</div>
+        config.status === 404 ? (
+          <div className="notice">
+            Aún no hay ninguna versión de configuración guardada. Se creará automáticamente al
+            publicar el primer cambio desde la página Cambios.
+          </div>
+        ) : (
+          <div className="error" role="alert">{config.message}</div>
+        )
       ) : (
         <>
           <p>
