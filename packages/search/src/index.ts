@@ -13,6 +13,8 @@ export interface ExaSearchOptions {
   numResults: number;
   /** Dominios a excluir (p. ej. linkedin.com: devuelve perfiles, no ofertas). */
   excludeDomains?: string[];
+  /** Si se da, Exa solo busca en estos dominios (portales de empleo de la campaña). */
+  includeDomains?: string[];
 }
 
 /**
@@ -42,6 +44,29 @@ export interface ExaClient {
 
 const EXA_SEARCH_URL = 'https://api.exa.ai/search';
 const SEARCH_TIMEOUT_MS = 30_000;
+
+const JOB_TITLE_WORDS =
+  /manager|director|officer|coordinador|administrador|responsable|tecnico|finance|finanzas|admin|controller|head|chief|lead|consult|advisor|assistant|asistente|gerente|jefe|analyst|specialist|especialista|coordinator|volunteer|voluntario|ingeniero|developer|engineer|accountant|contable|enfermer|medic|abogad|profesor|teacher|nurse|chef|comercial|ventas|marketing|disen|design|operario|conserje|limpieza|recepcion|empleo|vacante|oferta|job|vacancy|hiring|puesto|plaza|convocatoria/i;
+
+/**
+ * ¿Parece el título un PERFIL DE PERSONA en vez de una oferta? Exa, con
+ * consultas de cierto tipo, devuelve fichas de personas (su directorio
+ * «people» y similares): el «título» es un nombre propio desnudo de 2–4
+ * palabras alfabéticas, sin ninguna palabra de puesto o empleo. Visto en
+ * producción (campaña ONGs, 20-oct-2026): «Oriol Camí Marnet», «LUZANGELA
+ * BERNAL»… Esas filas ensuciaban la tabla de ofertas; se descartan en la
+ * ingesta. Conservador: cualquier palabra de rol/empleo, dígito, barra o
+ * símbolo salva el resultado.
+ */
+export function looksLikePersonProfile(title: string | null | undefined): boolean {
+  const t = (title ?? '').trim().replace(/\s+/g, ' ');
+  if (!t) return false;
+  const plain = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (JOB_TITLE_WORDS.test(plain)) return false;
+  const words = plain.split(' ');
+  if (words.length < 2 || words.length > 4) return false;
+  return words.every((w) => /^[A-Za-z''-]+$/.test(w));
+}
 
 /** Ventana de actualidad: solo páginas publicadas en los últimos N días. */
 export const RECENCY_WINDOW_DAYS = 30;
@@ -76,6 +101,9 @@ export function createExaClient(apiKey: string): ExaClient {
           type: 'auto',
           numResults: opts.numResults,
           excludeDomains: opts.excludeDomains ?? DEFAULT_EXCLUDED_DOMAINS,
+          ...(opts.includeDomains && opts.includeDomains.length > 0
+            ? { includeDomains: opts.includeDomains }
+            : {}),
           startPublishedDate: new Date(
             Date.now() - RECENCY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
           ).toISOString(),

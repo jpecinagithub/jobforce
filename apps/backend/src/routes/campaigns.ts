@@ -36,6 +36,7 @@ import {
   createExaClient,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
   generateQueries,
+  looksLikePersonProfile,
   type ExaClient,
 } from '@jobforce/search';
 import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
@@ -147,6 +148,7 @@ const CampaignCriteriaSchema: z.ZodType<CampaignCriteria> = z.object({
   preferences: z.record(PreferenceKeySchema, PreferenceDimSchema),
   queries: z.array(z.string().min(1).max(500)),
   unknown_policy: z.literal('conservative'),
+  include_domains: z.array(z.string().min(3).max(120)).max(30).optional(),
 });
 
 const CreateCampaignBody = z.object({
@@ -347,6 +349,8 @@ export interface BusquedaResumen {
   query: string;
   results_count: number;
   duplicates_count: number;
+  /** Resultados descartados por parecer perfiles de personas, no ofertas. */
+  filtered_count: number;
   cost_usd: number;
   error?: string;
 }
@@ -411,6 +415,7 @@ export async function ejecutarBusquedaCampana(
       query: string;
       results_count: number;
       duplicates_count: number;
+      filtered_count: number;
       cost_usd: number;
       error?: string;
     }> = [];
@@ -425,12 +430,26 @@ export async function ejecutarBusquedaCampana(
       );
       const searchId = inserted[0].id;
       try {
-        const resp = await client.search({ query: searchQuery, numResults });
+        const resp = await client.search({
+          query: searchQuery,
+          numResults,
+          ...(criteria.include_domains && criteria.include_domains.length > 0
+            ? { includeDomains: criteria.include_domains }
+            : {}),
+        });
         const cost = Number(resp.costDollars ?? 0);
 
         let insertedCount = 0;
+        let filteredCount = 0;
         const newOffers: Array<{ id: string; title: string; url: string; highlights: string[] }> = [];
         for (const result of resp.results) {
+          // Calidad de búsqueda: Exa a veces devuelve PERFILES de personas
+          // (su directorio «people») como si fueran ofertas; se descartan
+          // en la ingesta y no llegan a la tabla de ofertas.
+          if (looksLikePersonProfile(result.title)) {
+            filteredCount += 1;
+            continue;
+          }
           const canon = canonicalUrl(result.url);
           const rows = await query<{ id: string; title: string | null; url: string; highlights: unknown }>(
             `INSERT INTO offers
@@ -462,7 +481,7 @@ export async function ejecutarBusquedaCampana(
             });
           }
         }
-        const duplicatesCount = resp.results.length - insertedCount;
+        const duplicatesCount = resp.results.length - insertedCount - filteredCount;
 
         for (const offer of newOffers) {
           const ev = evaluate(
@@ -531,6 +550,7 @@ export async function ejecutarBusquedaCampana(
           query: searchQuery,
           results_count: resp.results.length,
           duplicates_count: duplicatesCount,
+          filtered_count: filteredCount,
           cost_usd: cost,
         });
       } catch (err) {
@@ -546,6 +566,7 @@ export async function ejecutarBusquedaCampana(
           query: searchQuery,
           results_count: 0,
           duplicates_count: 0,
+          filtered_count: 0,
           cost_usd: 0,
           error: message,
         });

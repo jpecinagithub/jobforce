@@ -10,6 +10,7 @@ import {
   generateQueries,
   canonicalUrl,
   checkUrlAlive,
+  looksLikePersonProfile,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
 } from '../src/index.js';
 import { defaultCriteria, type CampaignCriteria } from '@jobforce/domain';
@@ -208,6 +209,43 @@ describe('createExaClient', () => {
 // ---------------------------------------------------------------------------
 // constante de estimación
 // ---------------------------------------------------------------------------
+
+describe('looksLikePersonProfile', () => {
+  it('detecta los perfiles de personas reales vistos en producción', () => {
+    for (const t of [
+      'Oriol Camí Marnet',
+      'LUZANGELA BERNAL',
+      'zango ousmane',
+      'Tamara Garcia',
+      'Marcel FEZE',
+      'Wilmar Ivan Paez Pataquiva',
+      'Edward Andres Gonzalez Mancera',
+      'Khadim Ndiaye',
+    ]) {
+      assert.equal(looksLikePersonProfile(t), true, t);
+    }
+  });
+
+  it('nunca descarta una oferta de verdad', () => {
+    for (const t of [
+      'Finance Manager RCA - Coordination SUD',
+      'Country Financial Controller – NGO Jobs Africa',
+      'Coordinador/a expatriado/a Delegación de África Occidental',
+      'TÉCNICO/A PROYECTOS EN MALI - Red ONGD de Madrid',
+      'Administrativo/a de contabilidad y servicios generales',
+      'Head of Operational Finance & Support Services',
+      'Finance Manager',
+      'Senior Finance Manager, CFM & Special Projects',
+      'Global administrative coordinator – international missions',
+      'RECRUTEMENT D’UN RESPONSABLE ADMINISTRATIF ET FINANCIER',
+      null,
+      '',
+      'ReliefWeb',
+    ]) {
+      assert.equal(looksLikePersonProfile(t), false, String(t));
+    }
+  });
+});
 
 describe('EXA_COST_ESTIMATE_PER_SEARCH_USD', () => {
   it('es la estimación conservadora del contrato', () => {

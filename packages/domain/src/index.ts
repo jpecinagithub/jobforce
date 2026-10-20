@@ -276,6 +276,11 @@ export interface CampaignCriteria {
   preferences: Record<PreferenceKey, PreferenceDim>;
   queries: string[];
   unknown_policy: 'conservative';
+  /**
+   * Dominios a los que limitar las búsquedas Exa de esta campaña
+   * (portales de empleo del sector). Sin definir = web abierta.
+   */
+  include_domains?: string[];
 }
 
 /** Campaña de búsqueda. */
