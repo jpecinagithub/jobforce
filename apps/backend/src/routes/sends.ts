@@ -345,9 +345,12 @@ export function decidirEnvio(
   const ev = evaluarEnvio(politica, ctx);
 
   if (ev.decision === 'requiere_revision' && politica.modoActivo === 'preparar_para_revision') {
-    // La aprobación explícita de Jon solo promueve a `permitido` si el encaje
-    // alcanza el umbral automático; por debajo queda en revisión.
-    const encajeSuficiente = ctx.encaje !== null && ctx.encaje >= politica.reglas.umbralEncajeAutomatico;
+    // Decisión expresa de Jon (20-oct-2026): en modo revisión, su aprobación
+    // explícita basta desde el umbral de revisión; el umbral automático solo
+    // gobierna los envíos sin aprobación humana por candidatura. El suelo
+    // duro de `umbralEncajeRevision` ya se aplicó arriba (por debajo →
+    // bloqueado); sin encaje medido no se promueve.
+    const encajeSuficiente = ctx.encaje !== null && ctx.encaje >= politica.reglas.umbralEncajeRevision;
     if (encajeSuficiente) {
       return {
         decision: 'permitido',

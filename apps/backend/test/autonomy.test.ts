@@ -335,7 +335,7 @@ describe('autonomía (Fase 4)', () => {
     assert.equal(res.json<{ decision: string }>().decision, 'permitido');
   });
 
-  it('decisiones: encaje bajo bloquea, encaje medio e investigar requieren revisión', async () => {
+  it('decisiones: encaje bajo bloquea, encaje medio con aprobación permite desde 70, investigar requiere revisión', async () => {
     setSendTestDeps({
       offerProbe: async () => ({ ok: true, detalle: 'sonda de test: oferta abierta' }),
     });
@@ -350,6 +350,8 @@ describe('autonomía (Fase 4)', () => {
     assert.equal(b1.decision, 'bloqueado');
     assert.ok(b1.motivos.some((m) => m.includes('encaje_insuficiente')));
 
+    // Banda 70–75 con aprobación expresa de Jon: permitido (decisión de Jon
+    // 20-oct-2026: su aprobación basta desde el umbral de revisión, 70).
     const medio = await crearCandidatura({ score: 72 });
     const r2 = await app.inject({
       method: 'POST',
@@ -357,7 +359,7 @@ describe('autonomía (Fase 4)', () => {
       headers: authed(auth),
     });
     const b2 = r2.json<{ decision: string }>();
-    assert.equal(b2.decision, 'requiere_revision');
+    assert.equal(b2.decision, 'permitido');
 
     // En modo preparar_para_revision (semilla v1) con aprobación de Jon: permitido.
     const alto = await crearCandidatura({ score: 80 });

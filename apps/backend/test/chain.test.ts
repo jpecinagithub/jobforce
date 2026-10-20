@@ -3,9 +3,11 @@
  *
  * - En modo `preparar_para_revision`, aprobar encola el envío (misma lógica
  *   que request-send) y la respuesta lo dice: { send: 'encolado' }.
- * - Si la política lo bloquea (parada global, encaje en la banda 70–75 sin
- *   alcanzar el umbral automático…), la aprobación queda registrada, NO se
- *   encola nada y se abre una intervención con el motivo.
+ * - Si la política lo bloquea (parada global, encaje por debajo del suelo
+ *   de revisión de 70…), la aprobación queda registrada, NO se encola nada
+ *   y se abre una intervención con el motivo. En la banda 70–75 la
+ *   aprobación expresa de Jon SÍ basta para encolar (decisión 20-oct-2026:
+ *   el umbral automático solo gobierna envíos sin aprobación humana).
  * - En los demás modos, approve NO encadena (comportamiento intacto).
  * - El ejecutor procesa envíos en modo revisión SOLO si la candidatura
  *   está `approved` (aprobación expresa de Jon); si no, falla cerrado sin
@@ -240,7 +242,7 @@ describe('aprobación → envío encadenado (Fase 7)', () => {
     assert.equal(ivs[0].status, 'abierta');
   });
 
-  it('banda 70–75: la aprobación no basta para encolar (regla F4) y deja intervención', async () => {
+  it('banda 70–75: la aprobación expresa de Jon basta para encolar desde 70 (decisión 20-oct-2026)', async () => {
     await autorizarModo(app, auth, 'preparar_para_revision');
     const appId = await seedCandidatura({ score: 72 });
 
@@ -250,11 +252,10 @@ describe('aprobación → envío encadenado (Fase 7)', () => {
       headers: authed(auth),
     });
     const body = res.json<{ send?: { send: string; motivo?: string } }>();
-    assert.equal(body.send?.send, 'bloqueado');
-    assert.equal((await sendsDe(appId)).length, 0);
+    assert.equal(body.send?.send, 'encolado');
+    assert.equal((await sendsDe(appId)).length, 1);
     const ivs = await intervencionesDe(appId);
-    assert.equal(ivs.length, 1);
-    assert.equal(ivs[0].kind, 'fuera_de_politica');
+    assert.equal(ivs.length, 0);
   });
 
   it('en ejecutar_automatico, approve NO encadena (comportamiento intacto)', async () => {
