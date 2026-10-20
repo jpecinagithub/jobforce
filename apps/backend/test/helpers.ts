@@ -95,38 +95,38 @@ export async function resetDb(): Promise<void> {
     `INSERT INTO role_profiles (name, headline, summary, featured, skills, education_note, is_default) VALUES
        (
          'Finance Manager / CFO',
-         'Finance Manager / CFO · 15+ años · IFRS · Rol internacional con reubicación',
-         'Profesional de finanzas con más de 15 años entre España, Países Bajos y Perú. CFO de una empresa agroexportadora, contable financiero en un centro de servicios compartidos multinacional y líder de equipo contable durante siete años. Busca su próximo reto internacional.',
+         'Finance Manager / CFO · 15+ years · IFRS · International role with relocation',
+         'Finance professional with over 15 years of experience across Spain, the Netherlands and Peru. CFO of an agro-export company, financial accountant in a multinational shared services centre and accounting team leader for seven years. Seeking his next international challenge.',
          '[
-           {"title": "CFO — SurExport Peru Berries SAC", "subtitle": "Lima, Perú · 2023 – 2026", "description": ""},
-           {"title": "Financial Accountant — Dufry SSC", "subtitle": "Eindhoven, Países Bajos · 2021 – 2023", "description": ""},
+           {"title": "CFO — SurExport Peru Berries SAC", "subtitle": "Lima, Peru · 2023 – 2026", "description": ""},
+           {"title": "Financial Accountant — Dufry SSC", "subtitle": "Eindhoven, Netherlands · 2021 – 2023", "description": ""},
            {"title": "General Accountant Team Leader — Bexiflon SL", "subtitle": "Logroño · 2014 – 2021", "description": ""}
          ]'::jsonb,
-         '["IFRS", "SAP", "Oracle", "NetSuite", "SQL", "Excel avanzado", "Power BI", "Gestión de equipos"]'::jsonb,
-         'Ingeniero Industrial — Universidad de Navarra · Executive MBA — ICADE',
+         '["IFRS", "SAP", "Oracle", "NetSuite", "SQL", "Advanced Excel", "Power BI", "Team management"]'::jsonb,
+         'Industrial Engineering — Universidad de Navarra · Executive MBA — ICADE',
          true
        ),
        (
          'AI Engineer',
-         'AI Engineer · Diseño y construcción de aplicaciones y agentes de IA',
-         'Constructor de productos de IA con más de 50 aplicaciones reales desplegadas: agentes autónomos, estudios de generación de software y herramientas que combinan modelos de lenguaje con servicios en la nube. Diseña el producto, lo construye y lo deja funcionando en producción.',
+         'AI Engineer · Design and build of AI applications and agents',
+         'AI product builder with more than 50 real applications deployed: autonomous agents, software generation studios and tools that combine language models with cloud services. Designs the product, builds it and leaves it running in production.',
          '[
-           {"title": "AppForge AI Studio", "subtitle": "", "description": "Estudio que genera aplicaciones completas desde una descripción: agente, compilación y despliegue automáticos"},
-           {"title": "JOBFORCE", "subtitle": "", "description": "Agente que automatiza la búsqueda de empleo: descubre ofertas, adapta CV y cartas y hace el seguimiento"},
-           {"title": "Atlas de Proyectos", "subtitle": "", "description": "Catálogo visual e interactivo de su ecosistema de aplicaciones de IA"}
+           {"title": "AppForge AI Studio", "subtitle": "", "description": "Studio that generates complete applications from a description: agent, automatic build and deployment"},
+           {"title": "JOBFORCE", "subtitle": "", "description": "Agent that automates job search: discovers offers, tailors CVs and cover letters and tracks replies"},
+           {"title": "Atlas de Proyectos", "subtitle": "", "description": "Visual, interactive catalogue of his AI application ecosystem"}
          ]'::jsonb,
-         '["Agentes LLM", "OpenRouter · Groq · Mistral", "TypeScript", "APIs de IA", "Automatización web", "Docker"]'::jsonb,
+         '["LLM agents", "OpenRouter · Groq · Mistral", "TypeScript", "AI APIs", "Web automation", "Docker"]'::jsonb,
          NULL,
          false
        ),
        (
          'Full Stack Developer',
          'Full Stack Developer · React · Node.js · MySQL',
-         'Desarrollador full-stack con proyectos reales publicados: aplicaciones web con React y TypeScript, backends con Node.js y bases de datos, y juegos 3D originales para navegador. Formación completa en React, Node.js + Express y MySQL, aplicada en decenas de despliegues propios.',
+         'Full-stack developer with real published projects: web applications with React and TypeScript, Node.js backends and databases, and original 3D browser games. Complete training in React, Node.js + Express and MySQL, applied across dozens of his own deployments.',
          '[
-           {"title": "Juegos 3D para navegador (Three.js)", "subtitle": "", "description": "Ciudad abierta, fútbol y FPS militar, originales y jugables"},
-           {"title": "Más de 50 aplicaciones web", "subtitle": "", "description": "Desplegadas en Vercel, con repositorios en GitHub"},
-           {"title": "ERP web propio", "subtitle": "", "description": "En producción en su servidor"}
+           {"title": "3D browser games (Three.js)", "subtitle": "", "description": "Open city, football and military FPS, original and playable"},
+           {"title": "More than 50 web applications", "subtitle": "", "description": "Deployed on Vercel, with repositories on GitHub"},
+           {"title": "Own web ERP", "subtitle": "", "description": "Running in production on his server"}
          ]'::jsonb,
          '["React", "TypeScript", "Node.js + Express", "MySQL", "Vite", "Git / GitHub", "Vercel"]'::jsonb,
          NULL,

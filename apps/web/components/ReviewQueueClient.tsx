@@ -326,6 +326,22 @@ export default function ReviewQueueClient() {
                     </button>
                   )}
                 </div>
+
+                {it.documents && it.documents.length > 0 && (
+                  <div className="actions-row" style={{ marginTop: '0.45rem' }}>
+                    {it.documents.map((d) => (
+                      <a
+                        key={d.id}
+                        className="btn btn-small btn-ghost"
+                        href={`/api/documents/${d.id}/download`}
+                        download
+                      >
+                        ⬇ {d.kind === 'cv' ? 'Descargar CV' : 'Descargar carta'} (
+                        {d.format.toUpperCase()})
+                      </a>
+                    ))}
+                  </div>
+                )}
               </article>
             ))}
           </div>

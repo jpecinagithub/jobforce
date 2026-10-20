@@ -87,6 +87,36 @@ const evaluateOfferFn = (): typeof evaluateOffer => testDeps.evaluateOffer ?? ev
 // en BD, así que se rechaza con 400 antes de tocar la base de datos.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Documentos descargables de una candidatura: la versión más alta de cada
+ * tipo (cv / cover_letter) y formato. El panel enlaza a
+ * GET /api/documents/:id/download con estos ids.
+ */
+export async function latestDocuments(
+  applicationId: string,
+): Promise<Array<{ id: string; kind: string; format: string; version: number }>> {
+  const docs = await query<{
+    id: string;
+    kind: string;
+    format: string;
+    version: number;
+  }>(
+    `SELECT id, kind, format, version FROM documents
+      WHERE application_id = $1
+      ORDER BY kind, format, version DESC`,
+    [applicationId],
+  );
+  const seen = new Set<string>();
+  const out: Array<{ id: string; kind: string; format: string; version: number }> = [];
+  for (const d of docs) {
+    const key = `${d.kind}|${d.format}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out;
+}
+
 const CampaignStatusSchema = z.enum(['draft', 'active', 'archived']);
 
 const MandatoryRequirementSchema: z.ZodType<MandatoryRequirement> = z.object({
@@ -733,6 +763,37 @@ export async function registerCampaignRoutes(
         ORDER BY o.retrieved_at DESC`,
       [id],
     );
+    // Documentos descargables de cada candidatura (versión más alta por
+    // tipo/formato): el panel enlaza su descarga desde la tabla.
+    const docsByApp = new Map<
+      string,
+      Array<{ id: string; kind: string; format: string; version: number }>
+    >();
+    const appIds = rows.map((o) => o.application_id).filter((x): x is string => !!x);
+    if (appIds.length > 0) {
+      const docs = await query<{
+        id: string;
+        application_id: string;
+        kind: string;
+        format: string;
+        version: number;
+      }>(
+        `SELECT id, application_id, kind, format, version
+           FROM documents
+          WHERE application_id = ANY($1::uuid[])
+          ORDER BY application_id, kind, format, version DESC`,
+        [appIds],
+      );
+      const seen = new Set<string>();
+      for (const d of docs) {
+        const key = `${d.application_id}|${d.kind}|${d.format}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const list = docsByApp.get(d.application_id) ?? [];
+        list.push({ id: d.id, kind: d.kind, format: d.format, version: d.version });
+        docsByApp.set(d.application_id, list);
+      }
+    }
     return {
       offers: rows.map((o) => ({
         id: o.id,
@@ -741,7 +802,11 @@ export async function registerCampaignRoutes(
         url: o.url,
         url_ok: o.url_ok,
         application: o.application_id
-          ? { id: o.application_id, status: o.application_status }
+          ? {
+              id: o.application_id,
+              status: o.application_status,
+              documents: docsByApp.get(o.application_id) ?? [],
+            }
           : null,
         canonical_url: o.canonical_url,
         published_date: o.published_date,
@@ -792,7 +857,11 @@ export async function registerCampaignRoutes(
         retrieved_at: toIso(offer.retrieved_at),
         highlights: offer.highlights,
         application: offer.application_id
-          ? { id: offer.application_id, status: offer.application_status }
+          ? {
+              id: offer.application_id,
+              status: offer.application_status,
+              documents: await latestDocuments(offer.application_id),
+            }
           : null,
       },
       evaluation:

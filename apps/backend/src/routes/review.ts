@@ -23,8 +23,11 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { createReadStream, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { query, withTransaction } from '@jobforce/database';
 import { auditEvent } from '../audit.js';
+import { workspaceBase } from '../workspace.js';
 import { requireCsrf, requireSession } from '../auth.js';
 import { validateBody } from '../validation.js';
 import { crearIntervencionSiNoAbierta } from '../intervention.js';
@@ -133,8 +136,24 @@ function toIso(d: Date): string {
   return new Date(d).toISOString();
 }
 
+/** Documento descargable de una candidatura (la versión más alta por tipo). */
+export interface DocumentSummary {
+  id: string;
+  kind: string;
+  format: string;
+  version: number;
+}
+
+interface DocumentRow {
+  id: string;
+  application_id: string;
+  kind: string;
+  format: string;
+  version: number;
+}
+
 /** Resumen de encaje: las 3 dimensiones con más peso + nº de hechos referenciados. */
-function mapQueueRow(row: QueueRow) {
+function mapQueueRow(row: QueueRow, documents: DocumentSummary[] = []) {
   const top: TopDimension[] = asDimensions(row.breakdown)
     .sort((a, b) => b.peso - a.peso)
     .slice(0, 3)
@@ -157,6 +176,7 @@ function mapQueueRow(row: QueueRow) {
     },
     score: row.score === null ? null : Number(row.score),
     mandatoryVerdict: row.mandatory_verdict,
+    documents,
     resumenEncaje: {
       topDimensiones: top,
       hechosVerificados,
@@ -357,7 +377,65 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
         ORDER BY e.score DESC NULLS LAST, a.created_at ASC`,
       [REVIEWABLE_STATUS],
     );
-    return { queue: rows.map(mapQueueRow) };
+    // Documentos descargables por candidatura: solo la versión más alta
+    // de cada tipo (cv / cover_letter) en cada formato.
+    const docsByApp = new Map<string, DocumentSummary[]>();
+    if (rows.length > 0) {
+      const docs = await query<DocumentRow>(
+        `SELECT id, application_id, kind, format, version
+           FROM documents
+          WHERE application_id = ANY($1::uuid[])
+          ORDER BY application_id, kind, format, version DESC`,
+        [rows.map((r) => r.id)],
+      );
+      const seen = new Set<string>();
+      for (const d of docs) {
+        const key = `${d.application_id}|${d.kind}|${d.format}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const list = docsByApp.get(d.application_id) ?? [];
+        list.push({ id: d.id, kind: d.kind, format: d.format, version: d.version });
+        docsByApp.set(d.application_id, list);
+      }
+    }
+    return { queue: rows.map((r) => mapQueueRow(r, docsByApp.get(r.id) ?? [])) };
+  });
+
+  // GET /api/documents/:id/download — descarga el PDF (o DOCX) generado
+  // para una candidatura. La ruta almacenada es relativa a la base del
+  // workspace y debe quedar SIEMPRE bajo `jobforce/documents/` (defensa
+  // ante rutas manipuladas). Petición expresa de Jon (20-oct-2026): poder
+  // bajar el CV y la carta desde el panel.
+  app.get('/api/documents/:id/download', authOnly, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!UUID_RE.test(id ?? '')) {
+      return reply.code(400).send({ error: 'documento_invalido' });
+    }
+    const rows = await query<{ kind: string; format: string; file_path: string }>(
+      `SELECT kind, format, file_path FROM documents WHERE id = $1`,
+      [id],
+    );
+    const doc = rows[0];
+    if (!doc) {
+      return reply.code(404).send({ error: 'documento_no_encontrado' });
+    }
+    const root = resolve(join(workspaceBase(), 'jobforce', 'documents'));
+    const abs = resolve(join(workspaceBase(), doc.file_path));
+    if (!abs.startsWith(`${root}/`)) {
+      return reply.code(400).send({ error: 'ruta_no_permitida' });
+    }
+    if (!existsSync(abs)) {
+      return reply.code(404).send({ error: 'fichero_no_disponible' });
+    }
+    const baseName = doc.kind === 'cv' ? 'cv-jon-pecina' : 'cover-letter-jon-pecina';
+    const type =
+      doc.format === 'pdf'
+        ? 'application/pdf'
+        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    return reply
+      .type(type)
+      .header('Content-Disposition', `attachment; filename="${baseName}.${doc.format}"`)
+      .send(createReadStream(abs));
   });
 
   // POST /api/applications/:id/approve — Jon aprueba: ready_for_review → approved.

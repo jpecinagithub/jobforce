@@ -9,6 +9,9 @@
 import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { query } from '@jobforce/database';
 import {
@@ -382,5 +385,97 @@ describe('revisión manual (Fase 6.1)', () => {
     });
     assert.equal(res.statusCode, 200, res.body);
     assert.equal(res.json<{ intervention: { status: string } }>().intervention.status, 'resuelta');
+  });
+});
+
+describe('descarga de documentos desde el panel', () => {
+  let app: FastifyInstance;
+  let auth: AuthContext;
+  let baseTmp: string;
+  const PDF_FAKE = '%PDF-1.4 contenido de prueba';
+
+  before(async () => {
+    app = await buildTestApp();
+    baseTmp = join(tmpdir(), `jf-docs-test-${randomUUID().slice(0, 8)}`);
+    mkdirSync(baseTmp, { recursive: true });
+    process.env.JOBFORCE_WORKSPACE_BASE = baseTmp;
+  });
+
+  after(async () => {
+    delete process.env.JOBFORCE_WORKSPACE_BASE;
+    rmSync(baseTmp, { recursive: true, force: true });
+    await closeTestApp(app);
+  });
+
+  beforeEach(async () => {
+    await resetDb();
+    auth = await setupAndLogin(app);
+  });
+
+  /** Crea candidatura en revisión + un documento CV real en disco. */
+  async function crearConDocumento(filePath?: string): Promise<{ appId: string; docId: string }> {
+    const appId = await crearCandidatura({});
+    const rel = filePath ?? `jobforce/documents/${appId}/cv-v1.pdf`;
+    const abs = join(baseTmp, rel);
+    mkdirSync(join(abs, '..'), { recursive: true });
+    writeFileSync(abs, PDF_FAKE);
+    const d = await query<{ id: string }>(
+      `INSERT INTO documents (application_id, kind, format, version, file_path, bytes, sha256, template_version, generator)
+       VALUES ($1, 'cv', 'pdf', 1, $2, $3, 'abc', 'v1', 'test') RETURNING id`,
+      [appId, rel, PDF_FAKE.length],
+    );
+    return { appId, docId: d[0].id };
+  }
+
+  it('la cola incluye los documentos descargables de la candidatura', async () => {
+    const { docId } = await crearConDocumento();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/review/queue',
+      headers: authed(auth, false),
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    const queue = res.json<{ queue: Array<{ documents: Array<{ id: string; kind: string }> }> }>().queue;
+    assert.equal(queue.length, 1);
+    assert.deepEqual(queue[0].documents, [{ id: docId, kind: 'cv', format: 'pdf', version: 1 }]);
+  });
+
+  it('la descarga devuelve el fichero con sus cabeceras', async () => {
+    const { docId } = await crearConDocumento();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/documents/${docId}/download`,
+      headers: authed(auth, false),
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.equal(res.headers['content-type'], 'application/pdf');
+    assert.match(String(res.headers['content-disposition']), /cv-jon-pecina\.pdf/);
+    assert.equal(res.payload, PDF_FAKE);
+  });
+
+  it('descarga: 404 si el documento no existe y 400 si el id es inválido', async () => {
+    const noExiste = await app.inject({
+      method: 'GET',
+      url: `/api/documents/${randomUUID()}/download`,
+      headers: authed(auth, false),
+    });
+    assert.equal(noExiste.statusCode, 404);
+    const invalido = await app.inject({
+      method: 'GET',
+      url: '/api/documents/no-es-uuid/download',
+      headers: authed(auth, false),
+    });
+    assert.equal(invalido.statusCode, 400);
+  });
+
+  it('descarga: una ruta manipulada fuera de jobforce/documents se rechaza', async () => {
+    const { docId } = await crearConDocumento('jobforce/documents/../../secret.txt');
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/documents/${docId}/download`,
+      headers: authed(auth, false),
+    });
+    assert.equal(res.statusCode, 400, res.body);
+    assert.equal(res.json<{ error: string }>().error, 'ruta_no_permitida');
   });
 });

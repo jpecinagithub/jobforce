@@ -21,7 +21,11 @@ export default function PrepareApplication({
 }: {
   campaignId: string;
   offerId: string;
-  application: { id: string; status: string } | null;
+  application: {
+    id: string;
+    status: string;
+    documents?: Array<{ id: string; kind: string; format: string; version: number }>;
+  } | null;
   hasEvaluation: boolean;
 }) {
   const { mutatingHeaders } = useAuth();
@@ -43,6 +47,20 @@ export default function PrepareApplication({
           <span className="muted">
             La preparación quedó en borrador (revisa el motivo en el servidor o vuelve a intentarlo
             desde esta página tras recargar).
+          </span>
+        )}
+        {application.documents && application.documents.length > 0 && (
+          <span style={{ display: 'block', marginTop: '0.4rem' }}>
+            {application.documents.map((d) => (
+              <a
+                key={d.id}
+                href={`/api/documents/${d.id}/download`}
+                download
+                style={{ marginRight: '0.8rem' }}
+              >
+                ⬇ Descargar {d.kind === 'cv' ? 'CV' : 'carta'} ({d.format.toUpperCase()})
+              </a>
+            ))}
           </span>
         )}
       </p>

@@ -17,6 +17,6 @@ export type {
   LetterAdaptation,
 } from "./templates/cover-letter-template-v1.js";
 export { coverLetterModelToDocxBuffer, cvModelToDocxBuffer, extractDocxText } from "./docx-render.js";
-export { extractPdfTextWithPdftotext, renderHtmlToPdfAndPng } from "./browser.js";
+export { countPdfPages, extractPdfTextWithPdftotext, renderHtmlToPdfAndPng } from "./browser.js";
 export { allChecksOk, buildManifest, sha256File, validateDocuments } from "./manifest.js";
 export type { CheckItem, Manifest, ManifestFile, ValidateInputs } from "./manifest.js";

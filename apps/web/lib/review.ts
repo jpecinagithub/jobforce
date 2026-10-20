@@ -17,10 +17,19 @@ export interface TopDimension {
   hechos: number;
 }
 
+/** Documento descargable de la candidatura (versión más alta por tipo). */
+export interface DocumentSummary {
+  id: string;
+  kind: string;
+  format: string;
+  version: number;
+}
+
 /** GET /api/review/queue — una tarjeta de la cola. */
 export interface ReviewQueueItem {
   id: string;
   portal: string | null;
+  documents: DocumentSummary[];
   offer: {
     id: string;
     title: string | null;

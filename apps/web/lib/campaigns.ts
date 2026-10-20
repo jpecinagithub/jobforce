@@ -123,7 +123,12 @@ export interface OfferSummary {
   /** null = sin comprobar; true = viva; false = rota. */
   url_ok: boolean | null;
   /** Candidatura enlazada (Fase 7), si ya se preparó una para esta oferta. */
-  application: { id: string; status: string } | null;
+  application: {
+    id: string;
+    status: string;
+    /** Documentos descargables (versión más alta por tipo/formato). */
+    documents?: Array<{ id: string; kind: string; format: string; version: number }>;
+  } | null;
   canonical_url: string;
   published_date: string | null;
   retrieved_at: string;

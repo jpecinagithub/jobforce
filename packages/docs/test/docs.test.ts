@@ -113,6 +113,17 @@ describe("cv-template-v1", () => {
 });
 
 describe("cover-letter-template-v1", () => {
+  it("la compactación aprieta la carta sin cambiar el contenido (garantía de una hoja)", () => {
+    const model = buildCoverLetterModel(JON_PROFILE, JOB, LETTER_ADAPT, "19 October 2026");
+    const normal = renderCoverLetterHtml(model);
+    const compacta = renderCoverLetterHtml(model, { compact: 2 });
+    assert.notEqual(compacta, normal);
+    assert.ok(compacta.includes("10.5pt"));
+    assert.ok(compacta.includes("Dear Hiring Manager,"));
+    // El nivel por defecto es el 0: salida idéntica a no pasar opción.
+    assert.equal(renderCoverLetterHtml(model, { compact: 0 }), normal);
+  });
+
   it("es determinista y sin marcadores", () => {
     const a = renderCoverLetterHtml(buildCoverLetterModel(JON_PROFILE, JOB, LETTER_ADAPT, "19 October 2026"));
     const b = renderCoverLetterHtml(buildCoverLetterModel(JON_PROFILE, JOB, LETTER_ADAPT, "19 October 2026"));

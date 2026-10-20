@@ -26,6 +26,7 @@ import {
   applyRoleProfileEmphasis,
   buildCoverLetterModel,
   buildCvModel,
+  countPdfPages,
   renderCoverLetterHtml,
   renderCvHtml,
   renderHtmlToPdfAndPng,
@@ -73,7 +74,7 @@ export function detectarPortal(url: string | null | undefined): string {
 }
 
 export function nombrePortal(portal: string): string {
-  return PORTALES.find((p) => p.portal === portal)?.nombre ?? 'el portal de la oferta';
+  return PORTALES.find((p) => p.portal === portal)?.nombre ?? 'the job portal';
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +191,12 @@ export function construirPerfilCandidato(facts: ProfileFactInput[]): CandidatePr
     .sort((a, b) => String(b.v.start ?? '').localeCompare(String(a.v.start ?? '')))
     .map((e) => {
       const context = asStr(e.v.context);
+      // Bullets ricos del CV de Jon (hechos `bullets` por puesto): si el
+      // hecho los trae, son el cuerpo de la experiencia; si no, la frase
+      // de contexto como hasta ahora.
+      const rawBullets = Array.isArray(e.v.bullets)
+        ? e.v.bullets.filter((b): b is string => typeof b === 'string' && b.trim() !== '')
+        : [];
       return {
         key: `experience.${e.key.replace(/^exp_/, '')}`,
         title: asStr(e.v.title) ?? '',
@@ -197,7 +204,7 @@ export function construirPerfilCandidato(facts: ProfileFactInput[]): CandidatePr
         location: asStr(e.v.location) ?? '',
         start: fmtPeriodo(asStr(e.v.start)),
         end: fmtPeriodo(asStr(e.v.end)),
-        bullets: context ? [`${capitalizar(context)}.`] : [],
+        bullets: rawBullets.length > 0 ? rawBullets : context ? [`${capitalizar(context)}.`] : [],
       };
     });
 
@@ -210,9 +217,9 @@ export function construirPerfilCandidato(facts: ProfileFactInput[]): CandidatePr
       const note = warning
         ? primeraFrase(warning)
         : e.v.official === true
-          ? `Título oficial${issued ? `. Expedido: ${issued}` : ''}.`
+          ? `Official degree${issued ? `. Issued: ${issued}` : ''}.`
           : issued
-            ? `Expedido: ${issued}`
+            ? `Issued: ${issued}`
             : '';
       const start = asStr(e.v.start);
       const end = asStr(e.v.end);
@@ -376,13 +383,36 @@ function fechaCarta(hoy: Date): string {
 // ---------------------------------------------------------------------------
 
 export interface GenerarDocumentosDeps {
-  /** Render HTML→PDF+PNG. Por defecto, el de @jobforce/docs (Playwright). */
-  render?: (html: string, pdfPath: string, pngPath: string) => Promise<void>;
+  /**
+   * Render HTML→PDF+PNG. Por defecto, el de @jobforce/docs (Playwright).
+   * El 4º argumento es la escala del PDF (garantía de carta de una hoja).
+   */
+  render?: (
+    html: string,
+    pdfPath: string,
+    pngPath: string,
+    opts?: { scale?: number },
+  ) => Promise<void>;
   /** Base del workspace. Por defecto, `workspaceBase()`. */
   base?: string;
   /** Inspector de formularios (Fase 8.1). Solo para tests. */
   formConfigInspector?: InspectorFormulario;
 }
+
+/**
+ * Variantes de renderizado de la CARTA, de más holgada a más compacta.
+ * Regla de Jon (20-oct-2026): la carta nunca supera una hoja. Se prueba
+ * cada variante y se acepta la primera que quepa en 1 página; la última
+ * (escala 0.78) se acepta siempre como red final.
+ */
+const CARTA_VARIANTES: Array<{ compact: number; scale?: number }> = [
+  { compact: 0 },
+  { compact: 1 },
+  { compact: 2 },
+  { compact: 2, scale: 0.92 },
+  { compact: 2, scale: 0.85 },
+  { compact: 2, scale: 0.78 },
+];
 
 async function generarDocumentosPdf(
   applicationId: string,
@@ -394,8 +424,12 @@ async function generarDocumentosPdf(
   const base = deps.base ?? workspaceBase();
   const render =
     deps.render ??
-    (async (html: string, pdfPath: string, pngPath: string) => {
-      await renderHtmlToPdfAndPng(html, { pdfPath, pngPath });
+    (async (html: string, pdfPath: string, pngPath: string, opts?: { scale?: number }) => {
+      await renderHtmlToPdfAndPng(html, {
+        pdfPath,
+        pngPath,
+        ...(opts?.scale ? { scale: opts.scale } : {}),
+      });
     });
 
   const previas = await query<{ v: string }>(
@@ -413,19 +447,45 @@ async function generarDocumentosPdf(
   const cvModel = buildCvModel(candidato, cv);
   const letterModel = buildCoverLetterModel(candidato, job, carta, fechaCarta(new Date()));
 
-  const ficheros: Array<{ kind: 'cv' | 'cover_letter'; nombre: string; html: string; template: string }> = [
-    { kind: 'cv', nombre: `cv-v${version}.pdf`, html: renderCvHtml(cvModel), template: cvModel.templateVersion },
+  const ficheros: Array<{
+    kind: 'cv' | 'cover_letter';
+    nombre: string;
+    html: (compact: number) => string;
+    template: string;
+  }> = [
+    {
+      kind: 'cv',
+      nombre: `cv-v${version}.pdf`,
+      html: () => renderCvHtml(cvModel),
+      template: cvModel.templateVersion,
+    },
     {
       kind: 'cover_letter',
       nombre: `carta-v${version}.pdf`,
-      html: renderCoverLetterHtml(letterModel),
+      html: (compact) => renderCoverLetterHtml(letterModel, { compact }),
       template: letterModel.templateVersion,
     },
   ];
   for (const f of ficheros) {
     const pdfPath = join(dirAbs, f.nombre);
     const previo = f.kind === 'cv' ? 'preview-cv.png' : 'preview-carta.png';
-    await render(f.html, pdfPath, join(dirAbs, previo));
+    if (f.kind === 'cover_letter') {
+      // Garantía de una hoja: se acepta la primera variante que quepa en
+      // una página. Si el nº de páginas no se puede medir (render falso
+      // en tests), se acepta la primera variante sin más.
+      for (const v of CARTA_VARIANTES) {
+        await render(f.html(v.compact), pdfPath, join(dirAbs, previo), v.scale ? { scale: v.scale } : undefined);
+        let pages: number | null = null;
+        try {
+          pages = countPdfPages(pdfPath);
+        } catch {
+          pages = null;
+        }
+        if (pages === null || pages <= 1) break;
+      }
+    } else {
+      await render(f.html(0), pdfPath, join(dirAbs, previo));
+    }
     const buf = readFileSync(pdfPath);
     const sha256 = createHash('sha256').update(buf).digest('hex');
     await query(
@@ -627,6 +687,56 @@ export async function prepararCandidatura(
       motivo: `error_generando_documentos: ${msg}`,
     };
   }
+}
+
+/**
+ * Regenera los documentos (CV + carta, versión nueva) de una candidatura
+ * existente SIN tocar su estado: es la vía para refrescar los PDFs cuando
+ * cambia el perfil activo (p. ej. la traducción a inglés de los hechos,
+ * decisión de Jon de 20-oct-2026: los documentos van siempre en inglés).
+ * A diferencia de `prepararCandidatura`, también actúa sobre candidaturas
+ * en estados intocables (approved…): solo añade documentos nuevos.
+ */
+export async function regenerarDocumentos(
+  applicationId: string,
+  opts: PrepararOpts = {},
+): Promise<{ ok: boolean; motivo?: string }> {
+  const apps = await query<{ campaign_id: string; portal: string | null }>(
+    `SELECT campaign_id, portal FROM applications WHERE id = $1`,
+    [applicationId],
+  );
+  const app = apps[0];
+  if (!app) return { ok: false, motivo: 'candidatura_no_encontrada' };
+  const offers = await query<OfferRow>(
+    `SELECT o.id, o.title, o.company, o.url FROM offers o
+       JOIN applications a ON a.offer_id = o.id WHERE a.id = $1`,
+    [applicationId],
+  );
+  const offer = offers[0];
+  if (!offer) return { ok: false, motivo: 'oferta_no_encontrada' };
+  const candidato = construirPerfilCandidato(await cargarHechosPerfilActivo());
+  if (!candidato) return { ok: false, motivo: 'sin_perfil_activo_o_incompleto' };
+  const rolPerfil = await cargarPerfilRol(app.campaign_id);
+  await generarDocumentosPdf(
+    applicationId,
+    candidato,
+    {
+      title: offer.title,
+      company: offer.company,
+      url: offer.url,
+      portal: app.portal ?? detectarPortal(offer.url),
+    },
+    rolPerfil,
+    opts.deps,
+  );
+  await auditEvent({
+    actorId: opts.actorId ?? null,
+    action: 'application_documents_regenerated',
+    entityType: 'application',
+    entityId: applicationId,
+    details: { campaign_id: app.campaign_id, offer_id: offer.id },
+  });
+  return { ok: true };
 }
 
 /**

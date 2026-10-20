@@ -27,7 +27,7 @@ import {
   setupAndLogin,
   type AuthContext,
 } from './helpers.js';
-import { prepararCandidatura, prepararElegibles } from '../src/prepare.js';
+import { construirPerfilCandidato, prepararCandidatura, prepararElegibles } from '../src/prepare.js';
 
 let baseTmp = '';
 
@@ -253,7 +253,7 @@ describe('preparación de candidaturas (Fase 7)', () => {
     assert.equal(res1.status, 'ready_for_review');
     assert.equal(cap1.htmls.length, 2);
     for (const html of cap1.htmls) {
-      assert.match(html, /Profesional de finanzas con más de 15 años entre España/);
+      assert.match(html, /Finance professional with over 15 years of experience across Spain/);
       assert.match(html, /Role focus skills: IFRS, SAP, Oracle/);
     }
 
@@ -366,5 +366,55 @@ describe('preparación de candidaturas (Fase 7)', () => {
       url: `/api/campaigns/${baja.campaignId}/offers/${baja.offerId}/prepare`,
     });
     assert.equal(anon.statusCode, 401);
+  });
+});
+
+describe('construirPerfilCandidato: bullets de experiencia', () => {
+  const base = [
+    { category: 'identity', key: 'full_name', value: 'Jon Peciña Iturbe' },
+    { category: 'identity', key: 'email', value: 'jpecina@gmail.com' },
+  ];
+
+  it('usa los bullets del hecho cuando existen (experiencia desarrollada)', () => {
+    const profile = construirPerfilCandidato([
+      ...base,
+      {
+        category: 'experience',
+        key: 'exp_surexport',
+        value: {
+          start: '2023-11',
+          end: '2026-06',
+          title: 'CFO',
+          company: 'SurExport Peru Berries SAC',
+          location: 'Lima, Peru',
+          bullets: ['Lead financial operations.', 'Direct budgeting and planning.'],
+        },
+      },
+    ]);
+    assert.ok(profile);
+    assert.deepEqual(profile.experience[0].bullets, [
+      'Lead financial operations.',
+      'Direct budgeting and planning.',
+    ]);
+  });
+
+  it('sin bullets cae a la frase de contexto, como antes', () => {
+    const profile = construirPerfilCandidato([
+      ...base,
+      {
+        category: 'experience',
+        key: 'exp_dufry',
+        value: {
+          start: '2021-04',
+          end: '2023-09',
+          title: 'Financial Accountant',
+          company: 'DUFRY SSC',
+          location: 'Eindhoven, Netherlands',
+          context: 'multinational environment',
+        },
+      },
+    ]);
+    assert.ok(profile);
+    assert.deepEqual(profile.experience[0].bullets, ['Multinational environment.']);
   });
 });

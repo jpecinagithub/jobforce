@@ -163,9 +163,25 @@ export default async function CampaignDetailPage({
                   <td>{score === null ? '—' : score.toFixed(2)}</td>
                   <td>
                     {o.application ? (
-                      <span className={applicationBadgeClass(o.application.status)}>
-                        {APPLICATION_STATUS_LABELS[o.application.status] ?? o.application.status}
-                      </span>
+                      <>
+                        <span className={applicationBadgeClass(o.application.status)}>
+                          {APPLICATION_STATUS_LABELS[o.application.status] ?? o.application.status}
+                        </span>
+                        {o.application.documents && o.application.documents.length > 0 && (
+                          <span style={{ display: 'block', marginTop: '0.3rem' }}>
+                            {o.application.documents.map((d) => (
+                              <a
+                                key={d.id}
+                                href={`/api/documents/${d.id}/download`}
+                                download
+                                style={{ marginRight: '0.6rem', whiteSpace: 'nowrap' }}
+                              >
+                                ⬇ {d.kind === 'cv' ? 'CV' : 'Carta'}
+                              </a>
+                            ))}
+                          </span>
+                        )}
+                      </>
                     ) : (
                       <span className="muted">—</span>
                     )}

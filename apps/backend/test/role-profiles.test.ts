@@ -60,21 +60,21 @@ describe('perfiles por rol', () => {
     assert.equal(fin.isDefault, true);
     assert.equal(
       fin.headline,
-      'Finance Manager / CFO · 15+ años · IFRS · Rol internacional con reubicación',
+      'Finance Manager / CFO · 15+ years · IFRS · International role with relocation',
     );
-    assert.match(fin.summary, /más de 15 años entre España, Países Bajos y Perú/);
+    assert.match(fin.summary, /over 15 years of experience across Spain, the Netherlands and Peru/);
     assert.equal(fin.featured.length, 3);
     assert.equal(fin.featured[0].title, 'CFO — SurExport Peru Berries SAC');
-    assert.equal(fin.featured[0].subtitle, 'Lima, Perú · 2023 – 2026');
+    assert.equal(fin.featured[0].subtitle, 'Lima, Peru · 2023 – 2026');
     assert.deepEqual(fin.skills.slice(0, 3), ['IFRS', 'SAP', 'Oracle']);
     assert.equal(
       fin.educationNote,
-      'Ingeniero Industrial — Universidad de Navarra · Executive MBA — ICADE',
+      'Industrial Engineering — Universidad de Navarra · Executive MBA — ICADE',
     );
     const ai = profiles[1];
     assert.equal(ai.isDefault, false);
     assert.equal(ai.featured[0].title, 'AppForge AI Studio');
-    assert.match(ai.featured[0].description, /genera aplicaciones completas/);
+    assert.match(ai.featured[0].description, /generates complete applications/);
     assert.equal(profiles.filter((p) => p.isDefault).length, 1);
   });
 
@@ -181,7 +181,7 @@ describe('perfiles por rol', () => {
     assert.equal(updated.headline, 'AI Engineer · Agentes y datos');
     assert.deepEqual(updated.skills, ['Agentes LLM', 'Python']);
     // Lo no enviado no se toca.
-    assert.match(updated.summary, /Constructor de productos de IA/);
+    assert.match(updated.summary, /AI product builder/);
 
     const sinCambios = await app.inject({
       method: 'PUT',
