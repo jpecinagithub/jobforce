@@ -32,6 +32,11 @@ services:
         condition: service_healthy
     env_file:
       - ../.env
+    volumes:
+      # Fase 7: documentos generados (CV/cartas PDF). La base del backend
+      # dentro del contenedor es /home/app/workspace (homedir del usuario
+      # app); prepare.ts escribe y el ejecutor lee jobforce/documents/…
+      - docsdata:/home/app/workspace/jobforce
     restart: unless-stopped
     # Sin puertos publicados en el compose base: la exposición se hará
     # vía proxy inverso en el servidor.
@@ -39,3 +44,5 @@ services:
 volumes:
   pgdata:
     name: jobforce_pgdata
+  docsdata:
+    name: jobforce_docsdata

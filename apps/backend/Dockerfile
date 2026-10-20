@@ -24,7 +24,16 @@ RUN pnpm install --frozen-lockfile && pnpm build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Fase 7: Chromium del sistema para @jobforce/docs (PDF) y para el driver
+# de envíos; el ejecutable se fija por variable de entorno porque en el
+# contenedor no existe la caché de Playwright de la VM.
+RUN apk add --no-cache chromium ttf-dejavu fontconfig
+ENV PLAYWRIGHT_CHROMIUM_EXE=/usr/bin/chromium
 RUN addgroup -S app && adduser -S -G app app
+# Directorio de documentos generados: el compose monta aquí el volumen
+# persistente `docsdata`; se crea con dueño app para que el volumen
+# herede la propiedad en su primera inicialización.
+RUN mkdir -p /home/app/workspace/jobforce && chown -R app:app /home/app/workspace
 COPY --from=build --chown=app:app /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
 COPY --from=build --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/packages ./packages
