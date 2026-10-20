@@ -122,6 +122,13 @@ const CampaignCriteriaSchema: z.ZodType<CampaignCriteria> = z.object({
 const CreateCampaignBody = z.object({
   name: z.string().trim().min(1, 'el nombre es obligatorio').max(120),
   criteria: CampaignCriteriaSchema.optional(),
+  // Perfil por rol de la campaña (migración 012). Si se omite, se asigna el
+  // perfil marcado «por defecto»; null explícito = sin énfasis de rol.
+  role_profile_id: z
+    .string()
+    .regex(UUID_RE, 'el perfil por rol debe ser un UUID')
+    .nullable()
+    .optional(),
   exa_budget_cap_usd: z
     .number()
     .positive('el límite de presupuesto debe ser mayor que 0')
@@ -132,6 +139,11 @@ const CreateCampaignBody = z.object({
 const UpdateCampaignBody = z.object({
   name: z.string().trim().min(1, 'el nombre no puede estar vacío').max(120).optional(),
   criteria: CampaignCriteriaSchema.optional(),
+  role_profile_id: z
+    .string()
+    .regex(UUID_RE, 'el perfil por rol debe ser un UUID')
+    .nullable()
+    .optional(),
   exa_budget_cap_usd: z
     .number()
     .positive('el límite de presupuesto debe ser mayor que 0')
@@ -165,6 +177,7 @@ interface CampaignRow {
   id: string;
   name: string;
   criteria: CampaignCriteria;
+  role_profile_id: string | null;
   exa_budget_cap_usd: string;
   exa_spent_usd: string;
   total_budget_cap_usd: string | null;
@@ -221,6 +234,7 @@ function mapCampaign(row: CampaignRow): Campaign {
     id: row.id,
     name: row.name,
     criteria: row.criteria,
+    role_profile_id: row.role_profile_id ?? null,
     exa_budget_cap_usd: Number(row.exa_budget_cap_usd),
     exa_spent_usd: Number(row.exa_spent_usd),
     total_budget_cap_usd: row.total_budget_cap_usd === null ? null : Number(row.total_budget_cap_usd),
@@ -259,12 +273,28 @@ async function loadActiveProfileFacts(): Promise<{
 
 async function getCampaignOr404(id: string): Promise<CampaignRow | null> {
   const rows = await query<CampaignRow>(
-    `SELECT id, name, criteria, exa_budget_cap_usd, exa_spent_usd,
+    `SELECT id, name, criteria, role_profile_id, exa_budget_cap_usd, exa_spent_usd,
             total_budget_cap_usd, status, created_at, updated_at
        FROM campaigns WHERE id = $1`,
     [id],
   );
   return rows[0] ?? null;
+}
+
+/** ¿Existe el perfil por rol indicado? */
+async function roleProfileExists(roleProfileId: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(`SELECT id FROM role_profiles WHERE id = $1`, [
+    roleProfileId,
+  ]);
+  return rows.length > 0;
+}
+
+/** Id del perfil por rol marcado «por defecto» (null si no hay ninguno). */
+async function defaultRoleProfileId(): Promise<string | null> {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM role_profiles WHERE is_default ORDER BY created_at ASC LIMIT 1`,
+  );
+  return rows[0]?.id ?? null;
 }
 
 function checkCampaignId(id: unknown): id is string {
@@ -282,7 +312,7 @@ export async function registerCampaignRoutes(
   // GET /api/campaigns — lista con contadores de búsquedas y ofertas.
   app.get('/api/campaigns', authOnly, async () => {
     const rows = await query<CampaignRow>(
-      `SELECT c.id, c.name, c.criteria, c.exa_budget_cap_usd, c.exa_spent_usd,
+      `SELECT c.id, c.name, c.criteria, c.role_profile_id, c.exa_budget_cap_usd, c.exa_spent_usd,
               c.total_budget_cap_usd, c.status, c.created_at, c.updated_at,
               (SELECT COUNT(*) FROM searches s WHERE s.campaign_id = c.id) AS searches_count,
               (SELECT COUNT(*) FROM offers o WHERE o.campaign_id = c.id) AS offers_count
@@ -296,14 +326,28 @@ export async function registerCampaignRoutes(
     const valid = validateBody(CreateCampaignBody, req.body, reply);
     if (!valid) return;
     const criteria = valid.data.criteria ?? defaultCriteria();
+    // Perfil por rol: explícito (con existencia comprobada), null explícito
+    // (sin énfasis) u omitido (se asigna el perfil «por defecto» si existe).
+    let roleProfileId: string | null;
+    if (valid.data.role_profile_id === undefined) {
+      roleProfileId = await defaultRoleProfileId();
+    } else if (valid.data.role_profile_id === null) {
+      roleProfileId = null;
+    } else {
+      if (!(await roleProfileExists(valid.data.role_profile_id))) {
+        return reply.code(400).send({ error: 'perfil_rol_no_encontrado' });
+      }
+      roleProfileId = valid.data.role_profile_id;
+    }
     const rows = await query<{ id: string; name: string; exa_budget_cap_usd: string }>(
-      `INSERT INTO campaigns (name, criteria, exa_budget_cap_usd, created_by)
-       VALUES ($1, $2::jsonb, COALESCE($3::numeric, 3.0000), $4)
+      `INSERT INTO campaigns (name, criteria, exa_budget_cap_usd, role_profile_id, created_by)
+       VALUES ($1, $2::jsonb, COALESCE($3::numeric, 3.0000), $4, $5)
        RETURNING id, name, exa_budget_cap_usd`,
       [
         valid.data.name,
         JSON.stringify(criteria),
         valid.data.exa_budget_cap_usd ?? null,
+        roleProfileId,
         req.authSession?.userId ?? null,
       ],
     );
@@ -313,9 +357,13 @@ export async function registerCampaignRoutes(
       action: 'campaign_created',
       entityType: 'campaign',
       entityId: created.id,
-      details: { name: created.name, exa_budget_cap_usd: Number(created.exa_budget_cap_usd) },
+      details: {
+        name: created.name,
+        exa_budget_cap_usd: Number(created.exa_budget_cap_usd),
+        role_profile_id: roleProfileId,
+      },
     });
-    return reply.code(201).send({ id: created.id, name: created.name });
+    return reply.code(201).send({ id: created.id, name: created.name, role_profile_id: roleProfileId });
   });
 
   // GET /api/campaigns/:id — detalle.
@@ -352,6 +400,17 @@ export async function registerCampaignRoutes(
       params.push(JSON.stringify(valid.data.criteria));
       sets.push(`criteria = $${params.length}::jsonb`);
       changed.push('criteria');
+    }
+    if (valid.data.role_profile_id !== undefined) {
+      if (
+        valid.data.role_profile_id !== null &&
+        !(await roleProfileExists(valid.data.role_profile_id))
+      ) {
+        return reply.code(400).send({ error: 'perfil_rol_no_encontrado' });
+      }
+      params.push(valid.data.role_profile_id);
+      sets.push(`role_profile_id = $${params.length}`);
+      changed.push('role_profile_id');
     }
     if (valid.data.exa_budget_cap_usd !== undefined) {
       params.push(valid.data.exa_budget_cap_usd);

@@ -14,6 +14,7 @@ import type { AppConfig } from '@jobforce/config';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerProfileRoutes } from './routes/profile.js';
+import { registerRoleProfileRoutes } from './routes/roleProfiles.js';
 import { registerCampaignRoutes } from './routes/campaigns.js';
 import { registerAnswerRoutes } from './routes/answers.js';
 import { registerConfigRoutes } from './routes/config.js';
@@ -78,6 +79,7 @@ export function buildServer(config: AppConfig): FastifyInstance {
   app.register(registerHealthRoutes);
   app.register(async (instance) => registerAuthRoutes(instance, config));
   app.register(registerProfileRoutes);
+  app.register(registerRoleProfileRoutes);
   app.register(async (instance) => registerCampaignRoutes(instance, config));
   app.register(registerAnswerRoutes);
   app.register(registerConfigRoutes);

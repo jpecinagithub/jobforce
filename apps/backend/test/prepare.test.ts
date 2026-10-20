@@ -13,7 +13,7 @@
 import { after, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -219,6 +219,55 @@ describe('preparación de candidaturas (Fase 7)', () => {
     assert.equal(res.motivo, 'sin_perfil_activo_o_incompleto');
     const apps = await query<{ n: string }>(`SELECT COUNT(*)::text AS n FROM applications`);
     assert.equal(apps[0].n, '0');
+  });
+
+  it('con perfil por rol en la campaña, CV y carta abren con el bloque del rol; sin rol, no', async () => {
+    await seedPerfilActivo();
+    const perfiles = await query<{ id: string }>(
+      `SELECT id FROM role_profiles WHERE name = 'Finance Manager / CFO'`,
+    );
+    assert.equal(perfiles.length, 1, 'la semilla de perfiles por rol debe existir');
+    const roleId = perfiles[0].id;
+
+    const capturar = () => {
+      const htmls: string[] = [];
+      return {
+        htmls,
+        render: async (html: string, pdfPath: string) => {
+          htmls.push(html);
+          writeFileSync(pdfPath, Buffer.from('%PDF-ficticio'));
+        },
+      };
+    };
+
+    // Con rol: ambos documentos (CV y carta) abren con el bloque del rol.
+    const conRol = await seedOferta({});
+    await query(`UPDATE campaigns SET role_profile_id = $2 WHERE id = $1`, [
+      conRol.campaignId,
+      roleId,
+    ]);
+    const cap1 = capturar();
+    const res1 = await prepararCandidatura(conRol.campaignId, conRol.offerId, {
+      deps: { render: cap1.render },
+    });
+    assert.equal(res1.status, 'ready_for_review');
+    assert.equal(cap1.htmls.length, 2);
+    for (const html of cap1.htmls) {
+      assert.match(html, /Profesional de finanzas con más de 15 años entre España/);
+      assert.match(html, /Role focus skills: IFRS, SAP, Oracle/);
+    }
+
+    // Sin rol: ningún documento contiene el bloque del rol.
+    const sinRol = await seedOferta({});
+    const cap2 = capturar();
+    const res2 = await prepararCandidatura(sinRol.campaignId, sinRol.offerId, {
+      deps: { render: cap2.render },
+    });
+    assert.equal(res2.status, 'ready_for_review');
+    assert.equal(cap2.htmls.length, 2);
+    for (const html of cap2.htmls) {
+      assert.doesNotMatch(html, /Role focus skills/);
+    }
   });
 
   it('si la generación falla, queda en draft con failure_reason y se puede reintentar', async () => {

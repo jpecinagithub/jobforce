@@ -1,4 +1,6 @@
 export { JON_PROFILE, listProfileFactKeys } from "./profile.js";
+export { applyRoleProfileEmphasis, buildRoleProfileContext } from "./role-profile.js";
+export type { RoleProfileEmphasis } from "./role-profile.js";
 export type {
   CandidateProfile,
   Certification,

@@ -23,6 +23,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { query } from '@jobforce/database';
 import {
+  applyRoleProfileEmphasis,
   buildCoverLetterModel,
   buildCvModel,
   renderCoverLetterHtml,
@@ -32,6 +33,7 @@ import {
   type CvAdaptation,
   type JobPosting,
   type LetterAdaptation,
+  type RoleProfileEmphasis,
 } from '@jobforce/docs';
 import type { ProfileFactInput } from '@jobforce/eval';
 import { auditEvent } from './audit.js';
@@ -89,6 +91,34 @@ function asObj(v: unknown): Record<string, unknown> | null {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : null;
+}
+
+/**
+ * Perfil por rol elegido en la campaña (migración 012), como bloque de
+ * énfasis para la generación. null si la campaña no tiene perfil por rol
+ * (o si el perfil ya no existe): la generación se comporta como siempre.
+ */
+async function cargarPerfilRol(campaignId: string): Promise<RoleProfileEmphasis | null> {
+  const camps = await query<{ role_profile_id: string | null }>(
+    `SELECT role_profile_id FROM campaigns WHERE id = $1`,
+    [campaignId],
+  );
+  const roleProfileId = camps[0]?.role_profile_id;
+  if (!roleProfileId) return null;
+  const rows = await query<{ name: string; headline: string; summary: string; skills: unknown }>(
+    `SELECT name, headline, summary, skills FROM role_profiles WHERE id = $1`,
+    [roleProfileId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    name: row.name,
+    headline: row.headline,
+    summary: row.summary,
+    skills: Array.isArray(row.skills)
+      ? row.skills.filter((s): s is string => typeof s === 'string')
+      : [],
+  };
 }
 
 function asStr(v: unknown): string | null {
@@ -252,6 +282,7 @@ export interface OfertaInfo {
 function construirAdaptaciones(
   candidato: CandidateProfile,
   oferta: OfertaInfo,
+  rolPerfil: RoleProfileEmphasis | null = null,
 ): { cv: CvAdaptation; carta: LetterAdaptation; job: JobPosting } {
   const rol = oferta.title ?? 'Senior Finance Professional';
   const reciente = candidato.experience[0];
@@ -315,14 +346,15 @@ function construirAdaptaciones(
     employerNote: oferta.company ?? 'employer not named in the posting',
   };
 
-  return {
-    cv: { headline: rol, summary },
-    carta: {
-      body,
-      closing: 'Thank you for your time and consideration. I look forward to hearing from you.',
-    },
-    job,
+  // Énfasis del perfil por rol de la campaña: su bloque (titular, resumen,
+  // skills) se antepone al contexto de hechos. Sin rol, salida idéntica.
+  const baseCv: CvAdaptation = { headline: rol, summary };
+  const baseCarta: LetterAdaptation = {
+    body,
+    closing: 'Thank you for your time and consideration. I look forward to hearing from you.',
   };
+  const { cv, carta } = applyRoleProfileEmphasis(baseCv, baseCarta, rolPerfil);
+  return { cv, carta, job };
 }
 
 const MESES_LARGOS_EN = [
@@ -349,6 +381,7 @@ async function generarDocumentosPdf(
   applicationId: string,
   candidato: CandidateProfile,
   oferta: OfertaInfo,
+  rolPerfil: RoleProfileEmphasis | null = null,
   deps: GenerarDocumentosDeps = {},
 ): Promise<void> {
   const base = deps.base ?? workspaceBase();
@@ -369,7 +402,7 @@ async function generarDocumentosPdf(
   const dirAbs = join(base, dirRel);
   mkdirSync(dirAbs, { recursive: true });
 
-  const { cv, carta, job } = construirAdaptaciones(candidato, oferta);
+  const { cv, carta, job } = construirAdaptaciones(candidato, oferta, rolPerfil);
   const cvModel = buildCvModel(candidato, cv);
   const letterModel = buildCoverLetterModel(candidato, job, carta, fechaCarta(new Date()));
 
@@ -533,10 +566,12 @@ export async function prepararCandidatura(
   }
 
   try {
+    const rolPerfil = await cargarPerfilRol(campaignId);
     await generarDocumentosPdf(
       applicationId,
       candidato,
       { title: offer.title, company: offer.company, url: offer.url, portal },
+      rolPerfil,
       opts.deps,
     );
     await query(

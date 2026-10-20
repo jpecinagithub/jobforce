@@ -167,6 +167,57 @@ export interface CreateProfileFactRequest {
   sensitivity?: Sensitivity;
 }
 
+// ---------------------------------------------------------------------------
+// Perfiles por rol (fase «Perfiles por rol»)
+// ---------------------------------------------------------------------------
+
+/** Bloque destacado de un perfil por rol (una experiencia o un proyecto). */
+export interface RoleProfileFeaturedItem {
+  title: string;
+  subtitle: string;
+  description: string;
+}
+
+/**
+ * Perfil por rol: la presentación editable del perfil base para un objetivo
+ * concreto (Finance Manager, AI Engineer, Full Stack Developer...). Vive
+ * ENCIMA de los hechos verificados, que no se alteran: solo cambia el
+ * enfoque (titular, resumen, destacados y skills) con el que Jon se
+ * presenta a ese tipo de puesto.
+ */
+export interface RoleProfile {
+  id: string;
+  name: string;
+  headline: string;
+  summary: string;
+  featured: RoleProfileFeaturedItem[];
+  skills: string[];
+  educationNote: string | null;
+  isDefault: boolean;
+  createdAt: string; // ISO 8601
+  updatedAt: string; // ISO 8601
+}
+
+export interface CreateRoleProfileRequest {
+  name: string;
+  headline?: string;
+  summary?: string;
+  featured?: RoleProfileFeaturedItem[];
+  skills?: string[];
+  educationNote?: string | null;
+  isDefault?: boolean;
+}
+
+export interface UpdateRoleProfileRequest {
+  name?: string;
+  headline?: string;
+  summary?: string;
+  featured?: RoleProfileFeaturedItem[];
+  skills?: string[];
+  educationNote?: string | null;
+  isDefault?: boolean;
+}
+
 export interface CreateAnswerRequest {
   questionOriginal: string;
   questionNormalized: string;
@@ -229,6 +280,8 @@ export interface Campaign {
   id: string;
   name: string;
   criteria: CampaignCriteria;
+  /** Perfil por rol elegido para la campaña; null = sin énfasis de rol. */
+  role_profile_id: string | null;
   exa_budget_cap_usd: number;
   exa_spent_usd: number;
   /** Tope total de gasto (todas las categorías) en USD; null = sin tope propio. */
