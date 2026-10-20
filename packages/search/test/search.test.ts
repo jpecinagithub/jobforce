@@ -160,13 +160,16 @@ describe('createExaClient', () => {
     assert.equal(seenUrl, 'https://api.exa.ai/search');
     assert.equal(seenHeaders['x-api-key'], 'clave-ficticia');
     assert.equal(seenHeaders['content-type'], 'application/json');
-    assert.deepEqual(seenBody, {
-      query: 'CFO finance job',
-      type: 'auto',
-      numResults: 5,
-      excludeDomains: ['linkedin.com'],
-      contents: { highlights: true },
-    });
+    assert.equal(seenBody.query, 'CFO finance job');
+    assert.equal(seenBody.type, 'auto');
+    assert.equal(seenBody.numResults, 5);
+    assert.deepEqual(seenBody.excludeDomains, ['linkedin.com']);
+    assert.deepEqual(seenBody.contents, { highlights: true });
+    // Actualidad: startPublishedDate dentro de la ventana de 30 días.
+    const desde = new Date(String(seenBody.startPublishedDate)).getTime();
+    const ahora = Date.now();
+    assert.ok(Number.isFinite(desde), 'startPublishedDate debe ser una fecha ISO');
+    assert.ok(ahora - desde >= 29 * 24 * 3600 * 1000 && ahora - desde <= 31 * 24 * 3600 * 1000);
 
     assert.equal(res.requestId, 'req-123');
     assert.equal(res.costDollars, 0.008);

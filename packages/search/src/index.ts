@@ -43,6 +43,9 @@ export interface ExaClient {
 const EXA_SEARCH_URL = 'https://api.exa.ai/search';
 const SEARCH_TIMEOUT_MS = 30_000;
 
+/** Ventana de actualidad: solo páginas publicadas en los últimos N días. */
+export const RECENCY_WINDOW_DAYS = 30;
+
 /**
  * Estimación conservadora del coste por búsqueda ANTES de conocer el coste
  * real devuelto por la API (usada para bloquear búsquedas que superen el
@@ -65,11 +68,17 @@ export function createExaClient(apiKey: string): ExaClient {
         },
         // La skill canónica de Exa (build-with-exa) define esta forma:
         // type "auto" explícito y highlights dentro de `contents`.
+        // `startPublishedDate`: requisito básico de Jon (20-oct-2026) —
+        // solo ofertas recientes; las páginas de empleo caducadas o viejas
+        // eran la queja principal de calidad de búsqueda.
         body: JSON.stringify({
           query: opts.query,
           type: 'auto',
           numResults: opts.numResults,
           excludeDomains: opts.excludeDomains ?? DEFAULT_EXCLUDED_DOMAINS,
+          startPublishedDate: new Date(
+            Date.now() - RECENCY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+          ).toISOString(),
           contents: { highlights: true },
         }),
         signal: controller.signal,

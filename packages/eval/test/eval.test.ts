@@ -189,6 +189,74 @@ describe('evaluateOffer', () => {
     assert.equal(res.score, null);
   });
 
+  it('keyword de exclusión pura: cumple por ausencia de lo prohibido', () => {
+    const criteria = defaultCriteria();
+    criteria.mandatory.push({
+      id: 'sin_tercer_idioma',
+      kind: 'keyword',
+      description: 'Sin requisito de un tercer idioma',
+      params: { any_of: [], none_of: ['german required', 'fluent german'] },
+    });
+    const limpia = evaluateOffer(
+      {
+        title: 'Finance Manager',
+        url: 'https://example.com/jobs/ok',
+        highlights: ['Finance Manager. English required. Lead the finance team.'],
+      },
+      criteria,
+      FACTS,
+    );
+    const ok = limpia.mandatory_details.find((d) => d.requisito_id === 'sin_tercer_idioma');
+    assert.equal(ok?.estado, 'cumple');
+
+    const conAleman = evaluateOffer(
+      {
+        title: 'Finance Manager',
+        url: 'https://example.com/jobs/de',
+        highlights: ['Finance Manager. English required. Fluent German required.'],
+      },
+      criteria,
+      FACTS,
+    );
+    const mal = conAleman.mandatory_details.find((d) => d.requisito_id === 'sin_tercer_idioma');
+    assert.equal(mal?.estado, 'incumple');
+    assert.equal(conAleman.mandatory_verdict, 'incumple');
+  });
+
+  it('location exclude: España descarta y cualquier otro sitio cumple', () => {
+    const criteria = defaultCriteria();
+    const idx = criteria.mandatory.findIndex((m) => m.kind === 'location');
+    criteria.mandatory[idx] = {
+      id: 'ubicacion',
+      kind: 'location',
+      description: 'Cualquier parte del mundo excepto España',
+      params: { mode: 'exclude', countries: ['spain', 'españa', 'espana'] },
+    };
+    const enEspana = evaluateOffer(
+      {
+        title: 'Finance Manager',
+        url: 'https://example.com/jobs/es',
+        highlights: ['Finance Manager in Madrid, Spain. English required.'],
+      },
+      criteria,
+      FACTS,
+    );
+    const locEs = enEspana.mandatory_details.find((d) => d.requisito_id === 'ubicacion');
+    assert.equal(locEs?.estado, 'incumple');
+
+    const enBerlin = evaluateOffer(
+      {
+        title: 'Finance Manager',
+        url: 'https://example.com/jobs/de',
+        highlights: ['Finance Manager in Berlin. English required.'],
+      },
+      criteria,
+      FACTS,
+    );
+    const locDe = enBerlin.mandatory_details.find((d) => d.requisito_id === 'ubicacion');
+    assert.equal(locDe?.estado, 'cumple');
+  });
+
   it('la evidencia nunca supera los 200 caracteres', () => {
     const long = `CFO needed. ${'x'.repeat(500)} English required. ${'y'.repeat(500)}`;
     const res = evaluateOffer(

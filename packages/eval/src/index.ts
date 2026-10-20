@@ -318,6 +318,17 @@ function matchLocation(req: MandatoryRequirement, offer: EvalOfferInput, corpus:
   const remote = includesAny(corpus, REMOTE_TOKENS);
   const onsiteReq = includesAny(corpus, ONSITE_REQUIRED_TOKENS);
 
+  // mode 'exclude': vale cualquier ubicación EXCEPTO las listadas en
+  // `countries` (p. ej. «cualquier parte del mundo menos España», requisito
+  // básico de Jon, 20-oct-2026). La presencia de un país excluido descarta;
+  // su ausencia cumple, aunque no haya evidencia positiva de ubicación.
+  if (mode === 'exclude') {
+    if (allowed.length > 0) {
+      return { ...base, estado: 'incumple', evidencia: findEvidence(offer, allowed) };
+    }
+    return { ...base, estado: 'cumple', evidencia: '' };
+  }
+
   if (mode === 'remote_ok') {
     if (remote.length > 0 || allowed.length > 0) {
       return { ...base, estado: 'cumple', evidencia: findEvidence(offer, [...remote, ...allowed]) };
@@ -404,6 +415,14 @@ function matchKeyword(req: MandatoryRequirement, offer: EvalOfferInput, corpus: 
       estado: 'cumple',
       evidencia: findEvidence(offer, found),
     };
+  }
+  // Regla de exclusión pura (sin any_of): se cumple por AUSENCIA de lo
+  // prohibido — p. ej. «sin requisito de un tercer idioma» o «sin ofertas de
+  // EE. UU. que nieguen el sponsorship» (campaña internacional de Jon,
+  // 20-oct-2026). Sin esta rama, toda guarda de exclusión bloquearía el
+  // 100 % de las ofertas por falta de evidencia positiva.
+  if (anyOf.length === 0 && noneOf.length > 0) {
+    return { requisito_id: req.id, descripcion: req.description, estado: 'cumple', evidencia: '' };
   }
   return { requisito_id: req.id, descripcion: req.description, estado: 'sin_evidencia', evidencia: '' };
 }
