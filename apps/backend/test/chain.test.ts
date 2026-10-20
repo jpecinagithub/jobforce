@@ -8,7 +8,9 @@
  *   y se abre una intervención con el motivo. En la banda 70–75 la
  *   aprobación expresa de Jon SÍ basta para encolar (decisión 20-oct-2026:
  *   el umbral automático solo gobierna envíos sin aprobación humana).
- * - En los demás modos, approve NO encadena (comportamiento intacto).
+ * - Fase 8: en `ejecutar_automatico` aprobar TAMBIÉN encadena (la banda
+ *   70–74 espera en Revisión y la aprobación de Jon la envía); en
+ *   `investigar` approve NO encadena.
  * - El ejecutor procesa envíos en modo revisión SOLO si la candidatura
  *   está `approved` (aprobación expresa de Jon); si no, falla cerrado sin
  *   abrir el navegador.
@@ -258,8 +260,31 @@ describe('aprobación → envío encadenado (Fase 7)', () => {
     assert.equal(ivs.length, 0);
   });
 
-  it('en ejecutar_automatico, approve NO encadena (comportamiento intacto)', async () => {
+  it('en ejecutar_automatico, aprobar una de la banda 70–74 SÍ encadena (Fase 8.3)', async () => {
     await autorizarModo(app, auth, 'ejecutar_automatico');
+    const appId = await seedCandidatura({ score: 72 });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/applications/${appId}/approve`,
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    const body = res.json<{
+      ok: boolean;
+      application: { status: string };
+      send?: { send: string; motivo?: string };
+    }>();
+    assert.equal(body.ok, true);
+    assert.equal(body.application.status, 'approved');
+    assert.equal(body.send?.send, 'encolado');
+    const sends = await sendsDe(appId);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].status, 'queued');
+  });
+
+  it('en investigar, approve NO encadena (el modo investigar no envía)', async () => {
+    await autorizarModo(app, auth, 'investigar');
     const appId = await seedCandidatura({ score: 88 });
 
     const res = await app.inject({
@@ -270,7 +295,7 @@ describe('aprobación → envío encadenado (Fase 7)', () => {
     assert.equal(res.statusCode, 200, res.body);
     const body = res.json<{ ok: boolean; send?: unknown }>();
     assert.equal(body.ok, true);
-    assert.equal(body.send, undefined, 'sin campo send fuera del modo revisión');
+    assert.equal(body.send, undefined, 'sin campo send en modo investigar');
     assert.equal((await sendsDe(appId)).length, 0);
   });
 
