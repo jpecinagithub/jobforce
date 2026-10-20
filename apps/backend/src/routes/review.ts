@@ -401,6 +401,86 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     return { queue: rows.map((r) => mapQueueRow(r, docsByApp.get(r.id) ?? [])) };
   });
 
+  // GET /api/applications/history — histórico de candidaturas (petición
+  // de Jon, 20-oct-2026: «que se pueda ver desde la aplicación»): TODAS
+  // las candidaturas con empresa, puesto, nota, canal, estado y fecha de
+  // aplicación, y sus documentos descargables. Es la misma información
+  // que el registro en Markdown del asistente, pero viva desde la BD.
+  app.get('/api/applications/history', authOnly, async () => {
+    const rows = await query<{
+      id: string;
+      status: string;
+      portal: string | null;
+      submitted_at: Date | null;
+      submission_evidence: unknown;
+      created_at: Date;
+      campaign_name: string;
+      offer_id: string;
+      title: string | null;
+      company: string | null;
+      url: string;
+      application_email: string | null;
+      score: string | null;
+    }>(
+      `SELECT a.id, a.status, a.portal, a.submitted_at, a.submission_evidence,
+              a.created_at, c.name AS campaign_name,
+              o.id AS offer_id, o.title, o.company, o.url, o.application_email,
+              e.score
+         FROM applications a
+         JOIN offers o ON o.id = a.offer_id
+         JOIN campaigns c ON c.id = a.campaign_id
+         LEFT JOIN evaluations e
+           ON e.offer_id = a.offer_id AND e.campaign_id = a.campaign_id
+        ORDER BY a.submitted_at DESC NULLS LAST, a.created_at DESC`,
+    );
+    const docsByApp = new Map<string, DocumentSummary[]>();
+    if (rows.length > 0) {
+      const docs = await query<DocumentRow>(
+        `SELECT id, application_id, kind, format, version
+           FROM documents
+          WHERE application_id = ANY($1::uuid[])
+          ORDER BY application_id, kind, format, version DESC`,
+        [rows.map((r) => r.id)],
+      );
+      const seen = new Set<string>();
+      for (const d of docs) {
+        const key = `${d.application_id}|${d.kind}|${d.format}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const list = docsByApp.get(d.application_id) ?? [];
+        list.push({ id: d.id, kind: d.kind, format: d.format, version: d.version });
+        docsByApp.set(d.application_id, list);
+      }
+    }
+    return {
+      history: rows.map((r) => {
+        const ev =
+          r.submission_evidence && typeof r.submission_evidence === 'object'
+            ? (r.submission_evidence as Record<string, unknown>)
+            : null;
+        const channel =
+          ev && typeof ev.channel === 'string'
+            ? ev.channel
+            : r.application_email
+              ? 'email'
+              : r.portal;
+        return {
+          id: r.id,
+          status: r.status,
+          portal: r.portal,
+          channel,
+          submittedTo: ev && typeof ev.to === 'string' ? ev.to : null,
+          submittedAt: r.submitted_at ? toIso(r.submitted_at) : null,
+          createdAt: toIso(r.created_at),
+          campaign: r.campaign_name,
+          offer: { id: r.offer_id, title: r.title, company: r.company, url: r.url },
+          score: r.score === null ? null : Number(r.score),
+          documents: docsByApp.get(r.id) ?? [],
+        };
+      }),
+    };
+  });
+
   // GET /api/documents/:id/download — descarga el PDF (o DOCX) generado
   // para una candidatura. La ruta almacenada es relativa a la base del
   // workspace y debe quedar SIEMPRE bajo `jobforce/documents/` (defensa

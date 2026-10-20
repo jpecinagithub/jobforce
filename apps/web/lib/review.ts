@@ -76,6 +76,51 @@ export interface BatchResponse {
   items: BatchItemResult[];
 }
 
+/** Una fila del histórico de candidaturas (GET /api/applications/history). */
+export interface HistoryItem {
+  id: string;
+  status: string;
+  portal: string | null;
+  /** Canal de envío: 'email', 'portal' o el portal concreto; null si aún no aplica. */
+  channel: string | null;
+  /** Buzón de destino cuando el envío fue por email. */
+  submittedTo: string | null;
+  /** Fecha de aplicación (ISO) si ya se envió; null en caso contrario. */
+  submittedAt: string | null;
+  createdAt: string;
+  campaign: string;
+  offer: { id: string; title: string | null; company: string | null; url: string };
+  score: number | null;
+  documents: DocumentSummary[];
+}
+
+export interface HistoryResponse {
+  history: HistoryItem[];
+}
+
+export const APPLICATION_STATUS_LABELS: Record<string, string> = {
+  submitted: 'Enviada',
+  approved: 'Aprobada',
+  ready_for_review: 'En revisión',
+  withdrawn: 'Retirada',
+  sending: 'Enviando…',
+  submission_failed: 'Envío fallido',
+};
+
+export function channelLabel(channel: string | null): string {
+  if (!channel) return '—';
+  const map: Record<string, string> = {
+    email: 'Email',
+    portal: 'Portal',
+    greenhouse: 'Greenhouse',
+    lever: 'Lever',
+    personio: 'Personio',
+    workday: 'Workday',
+    otro: 'Portal',
+  };
+  return map[channel] ?? channel;
+}
+
 /** Etiqueta legible de una dimensión del breakdown. */
 export function dimensionLabel(dimension: string): string {
   return (PREFERENCE_LABELS as Record<string, string>)[dimension] ?? dimension;

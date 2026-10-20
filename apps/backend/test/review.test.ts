@@ -388,6 +388,76 @@ describe('revisión manual (Fase 6.1)', () => {
   });
 });
 
+describe('histórico de candidaturas', () => {
+  let app: FastifyInstance;
+  let auth: AuthContext;
+
+  before(async () => {
+    app = await buildTestApp();
+  });
+
+  after(async () => {
+    await closeTestApp(app);
+  });
+
+  beforeEach(async () => {
+    await resetDb();
+    auth = await setupAndLogin(app);
+  });
+
+  it('exige sesión', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/applications/history' });
+    assert.equal(res.statusCode, 401);
+  });
+
+  it('lista todas las candidaturas con empresa, nota, canal y fecha de envío', async () => {
+    const enviada = await crearCandidatura({
+      company: 'Mundubat',
+      title: 'Coordinador/a expatriado/a',
+      score: 76.25,
+      appStatus: 'submitted',
+    });
+    await query(
+      `UPDATE applications
+          SET submitted_at = '2026-10-20T15:12:00Z',
+              submission_evidence = $2::jsonb
+        WHERE id = $1`,
+      [enviada, JSON.stringify({ channel: 'email', to: 'candidaturas@mundubat.org', gmail_message_id: 'msg-1' })],
+    );
+    await crearCandidatura({ company: 'Acme', title: 'Finance Manager', score: 70, appStatus: 'ready_for_review' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/applications/history',
+      headers: { cookie: auth.cookie },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as {
+      history: Array<{
+        id: string;
+        status: string;
+        channel: string | null;
+        submittedTo: string | null;
+        submittedAt: string | null;
+        campaign: string;
+        offer: { title: string | null; company: string | null };
+        score: number | null;
+      }>;
+    };
+    assert.equal(body.history.length, 2);
+    // La enviada va primero (fecha de envío más reciente primero).
+    const primera = body.history[0];
+    assert.equal(primera.id, enviada);
+    assert.equal(primera.status, 'submitted');
+    assert.equal(primera.channel, 'email');
+    assert.equal(primera.submittedTo, 'candidaturas@mundubat.org');
+    assert.ok(primera.submittedAt && primera.submittedAt.startsWith('2026-10-20'));
+    assert.equal(primera.offer.company, 'Mundubat');
+    assert.equal(primera.score, 76.25);
+    assert.equal(body.history[1].submittedAt, null);
+  });
+});
+
 describe('descarga de documentos desde el panel', () => {
   let app: FastifyInstance;
   let auth: AuthContext;
