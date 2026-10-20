@@ -275,6 +275,43 @@ describe('evaluateOffer', () => {
     assert.equal(res.mandatory_verdict, 'cumple');
   });
 
+  it('idioma: oferta redactada en castellano cumple si el castellano está aceptado (campaña ONGs)', () => {
+    const criteria = defaultCriteria();
+    const langReq = criteria.mandatory.find((r) => r.id === 'ingles');
+    assert.ok(langReq);
+    langReq.params = { languages: ['english', 'inglés', 'spanish', 'español', 'castellano'] };
+    const res = evaluateOffer(
+      {
+        title: 'Administrador de País — Cooperación Internacional',
+        url: 'https://example.com/jobs/ong',
+        highlights: [
+          'Buscamos administrador de país para nuestra misión en Senegal. La persona seleccionada será responsable de la gestión financiera del proyecto, la elaboración de presupuestos y la justificación de subvenciones, trabajando con el equipo local y con la sede. Se requiere experiencia en administración de proyectos de cooperación y en el manejo de herramientas contables.',
+        ],
+      },
+      criteria,
+      FACTS,
+    );
+    const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ing?.estado, 'cumple');
+    assert.ok(ing && ing.evidencia.length > 0);
+  });
+
+  it('idioma: oferta redactada en castellano NO cumple si solo se pide inglés', () => {
+    const res = evaluateOffer(
+      {
+        title: 'Administrador de País — Cooperación Internacional',
+        url: 'https://example.com/jobs/ong2',
+        highlights: [
+          'Buscamos administrador de país para nuestra misión en Senegal. La persona seleccionada será responsable de la gestión financiera del proyecto, la elaboración de presupuestos y la justificación de subvenciones, trabajando con el equipo local y con la sede.',
+        ],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ing?.estado, 'sin_evidencia');
+  });
+
   it('idioma: oferta redactada en español sin nombrar el inglés → sin_evidencia', () => {
     const res = evaluateOffer(
       {

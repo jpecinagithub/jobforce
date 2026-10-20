@@ -299,7 +299,7 @@ function matchRole(req: MandatoryRequirement, offer: EvalOfferInput, corpus: str
  */
 const STOPWORDS: Record<string, string[]> = {
   en: ['the', 'and', 'with', 'for', 'you', 'your', 'our', 'will', 'are', 'this', 'that', 'have', 'has', 'who', 'what', 'when', 'where', 'they', 'their', 'from', 'about', 'into', 'over', 'after', 'before', 'between', 'through', 'working', 'experience', 'responsibilities', 'requirements', 'opportunity', 'looking', 'join', 'team', 'role', 'work'],
-  es: ['los', 'las', 'una', 'del', 'que', 'con', 'para', 'por', 'como', 'más', 'este', 'esta', 'son', 'sobre', 'también', 'hasta', 'desde', 'donde', 'cuando', 'muy', 'sin', 'sus', 'empresa', 'años', 'equipo', 'trabajo'],
+  es: ['la', 'de', 'en', 'el', 'y', 'es', 'un', 'los', 'las', 'una', 'del', 'que', 'con', 'para', 'por', 'como', 'más', 'este', 'esta', 'son', 'sobre', 'también', 'hasta', 'desde', 'donde', 'cuando', 'muy', 'sin', 'sus', 'se', 'al', 'su', 'está', 'nuestra', 'nuestro', 'empresa', 'años', 'equipo', 'trabajo'],
   de: ['der', 'die', 'das', 'und', 'mit', 'für', 'von', 'den', 'ist', 'ein', 'eine', 'im', 'sich', 'auf', 'werden', 'aus', 'wir', 'sie', 'bei', 'einer', 'einem', 'einen', 'als', 'auch', 'nach', 'und', 'unsere', 'unser', 'oder'],
   fr: ['les', 'des', 'une', 'dans', 'pour', 'qui', 'que', 'est', 'sur', 'avec', 'aux', 'par', 'pas', 'vous', 'nous', 'être', 'sont', 'ces', 'au', 'ou', 'être'],
   nl: ['het', 'een', 'van', 'dat', 'die', 'zijn', 'voor', 'met', 'aan', 'tot', 'ook', 'als', 'bij', 'naar', 'je', 'wij', 'er', 'om', 'op'],
@@ -315,31 +315,41 @@ function distinctStopwords(corpus: string, words: string[]): number {
 }
 
 /**
- * ¿Está el texto redactado en inglés? Regla de Jon (20-oct-2026): «todas
- * las ofertas en las que aplico están en inglés» — si el anuncio está
- * escrito en inglés, el idioma de trabajo es inglés aunque nunca nombre
- * la palabra «English». Detección conservadora: muchas palabras
- * funcionales inglesas distintas y dominio claro (más del doble que
- * cualquier otro idioma detectado).
+ * Idioma en que está redactada la oferta ('en' | 'es' | null). Regla de
+ * Jon (20-oct-2026): si el anuncio está escrito en un idioma de trabajo
+ * aceptado, ese idioma vale aunque nunca lo nombre («todas las ofertas
+ * en las que aplico están en inglés»; la campaña de ONGs acepta también
+ * castellano). Detección conservadora: el idioma ganador debe tener
+ * muchas palabras funcionales distintas y dominar (más del doble que
+ * el segundo). Solo se reconocen inglés y castellano, los idiomas de
+ * trabajo de Jon; cualquier otro texto devuelve null.
  */
-function corpusIsEnglish(corpus: string): boolean {
-  const en = distinctStopwords(corpus, STOPWORDS['en']);
-  if (en < 8) return false;
-  let maxOther = 0;
+function corpusLanguage(corpus: string): 'en' | 'es' | null {
+  let top: string | null = null;
+  let topCount = 0;
+  let secondCount = 0;
   for (const lang of Object.keys(STOPWORDS)) {
-    if (lang === 'en') continue;
-    maxOther = Math.max(maxOther, distinctStopwords(corpus, STOPWORDS[lang]));
+    const n = distinctStopwords(corpus, STOPWORDS[lang]);
+    if (n > topCount) {
+      secondCount = topCount;
+      topCount = n;
+      top = lang;
+    } else if (n > secondCount) {
+      secondCount = n;
+    }
   }
-  return en > 2 * maxOther;
+  if (top !== 'en' && top !== 'es') return null;
+  if (topCount < 8 || topCount <= 2 * secondCount) return null;
+  return top;
 }
 
-/** La frase de la oferta con más señal de inglés (para citarla como evidencia). */
-function englishEvidence(offer: EvalOfferInput): string {
+/** La frase de la oferta con más señal del idioma dado (como evidencia). */
+function languageEvidence(offer: EvalOfferInput, lang: 'en' | 'es'): string {
   const sources = [offer.title, ...offer.highlights];
   let best = '';
   let bestScore = -1;
   for (const s of sources) {
-    const score = distinctStopwords(norm(s), STOPWORDS['en']);
+    const score = distinctStopwords(norm(s), STOPWORDS[lang]);
     if (score > bestScore) {
       bestScore = score;
       best = s;
@@ -348,6 +358,12 @@ function englishEvidence(offer: EvalOfferInput): string {
   const clean = best.replace(/\s+/g, ' ').trim();
   return clean.length > 200 ? clean.slice(0, 200) : clean;
 }
+
+/** Alias aceptados por idioma al declarar el requisito. */
+const LANGUAGE_ALIASES: Record<'en' | 'es', string[]> = {
+  en: ['english', 'inglés', 'ingles', 'en'],
+  es: ['spanish', 'español', 'espanol', 'castellano', 'es'],
+};
 
 function matchLanguage(req: MandatoryRequirement, offer: EvalOfferInput, corpus: string): MandatoryDetail {
   const languages = (req.params['languages'] as string[] | undefined) ?? [];
@@ -360,16 +376,19 @@ function matchLanguage(req: MandatoryRequirement, offer: EvalOfferInput, corpus:
       evidencia: findEvidence(offer, found),
     };
   }
-  // Sin mención literal: si se pide inglés y la oferta ESTÁ REDACTADA en
-  // inglés, el requisito se cumple (decisión expresa de Jon, 20-oct-2026).
-  const wantsEnglish = languages.some((l) => ['english', 'inglés', 'ingles', 'en'].includes(norm(l)));
-  if (wantsEnglish && corpusIsEnglish(corpus)) {
-    return {
-      requisito_id: req.id,
-      descripcion: req.description,
-      estado: 'cumple',
-      evidencia: englishEvidence(offer),
-    };
+  // Sin mención literal: si la oferta ESTÁ REDACTADA en un idioma pedido
+  // (inglés o castellano), el requisito se cumple igualmente.
+  const detected = corpusLanguage(corpus);
+  if (detected) {
+    const requested = languages.map((l) => norm(l));
+    if (LANGUAGE_ALIASES[detected].some((a) => requested.includes(a))) {
+      return {
+        requisito_id: req.id,
+        descripcion: req.description,
+        estado: 'cumple',
+        evidencia: languageEvidence(offer, detected),
+      };
+    }
   }
   return { requisito_id: req.id, descripcion: req.description, estado: 'sin_evidencia', evidencia: '' };
 }
