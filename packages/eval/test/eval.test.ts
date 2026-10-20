@@ -296,6 +296,25 @@ describe('evaluateOffer', () => {
     assert.ok(ing && ing.evidencia.length > 0);
   });
 
+  it('idioma: inglés con señal moderada (6 funcionales, dominio claro) también cumple', () => {
+    // Caso real (World Vision Honduras, 20-oct-2026): titular en español y
+    // descripción en inglés con 7 palabras funcionales distintas — la
+    // detección debe reconocerla sin bajar el listón del dominio.
+    const res = evaluateOffer(
+      {
+        title: 'Senior Finance Manager — Tegucigalpa',
+        url: 'https://example.com/jobs/wv',
+        highlights: [
+          'With years of experience, our focus is on helping the most vulnerable children. Come join our staff working in nearly 100 countries and share the joy of transforming lives with the team.',
+        ],
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ing?.estado, 'cumple');
+  });
+
   it('idioma: oferta redactada en castellano NO cumple si solo se pide inglés', () => {
     const res = evaluateOffer(
       {

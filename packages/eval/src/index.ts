@@ -339,7 +339,7 @@ function corpusLanguage(corpus: string): 'en' | 'es' | null {
     }
   }
   if (top !== 'en' && top !== 'es') return null;
-  if (topCount < 8 || topCount <= 2 * secondCount) return null;
+  if (topCount < 6 || topCount <= 2 * secondCount) return null;
   return top;
 }
 
