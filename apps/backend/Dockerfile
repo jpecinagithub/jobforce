@@ -27,7 +27,10 @@ ENV NODE_ENV=production
 # Fase 7: Chromium del sistema para @jobforce/docs (PDF) y para el driver
 # de envíos; el ejecutable se fija por variable de entorno porque en el
 # contenedor no existe la caché de Playwright de la VM.
-RUN apk add --no-cache chromium ttf-dejavu fontconfig
+# poppler-utils: pdfinfo/pdftotext los usa @jobforce/docs (conteo de
+# páginas de la garantía «carta de una hoja» y extracción de texto); sin
+# este paquete esas funciones fallan en silencio dentro del contenedor.
+RUN apk add --no-cache chromium ttf-dejavu fontconfig poppler-utils
 ENV PLAYWRIGHT_CHROMIUM_EXE=/usr/bin/chromium
 RUN addgroup -S app && adduser -S -G app app
 # Directorio de documentos generados: el compose monta aquí el volumen
