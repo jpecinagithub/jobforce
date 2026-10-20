@@ -35,6 +35,9 @@ importers:
       '@jobforce/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@jobforce/docs':
+        specifier: workspace:*
+        version: link:../../packages/docs
       '@jobforce/domain':
         specifier: workspace:*
         version: link:../../packages/domain
