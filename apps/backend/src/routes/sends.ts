@@ -294,9 +294,12 @@ export interface DecisionResultado {
  *  4. Núcleo de la política: `evaluarEnvio` de `@jobforce/autonomy`
  *     (fuente única de verdad; incluye el LÍMITE DURO: automático sin
  *     autorización escrita → `bloqueado`).
- *  5. En `preparar_para_revision`, la aprobación explícita de Jon (check
- *     `oferta_aprobada` ya superado) satisface el requisito de revisión →
- *     `permitido` (encolar).
+ *  5. Con aprobación HUMANA expresa (la candidatura está en `approved`),
+ *     el requisito de revisión queda satisfecho y el encaje solo necesita
+ *     alcanzar el umbral de revisión → `permitido` (encolar). Aplica en
+ *     `preparar_para_revision` y en `ejecutar_automatico` (Fase 8): en
+ *     automático, una candidatura en `ready_for_review` (sin aprobación
+ *     humana) NUNCA se promueve por debajo del umbral automático.
  */
 export function decidirEnvio(
   app: ApplicationRow,
@@ -344,11 +347,14 @@ export function decidirEnvio(
   };
   const ev = evaluarEnvio(politica, ctx);
 
-  if (ev.decision === 'requiere_revision' && politica.modoActivo === 'preparar_para_revision') {
-    // Decisión expresa de Jon (20-oct-2026): en modo revisión, su aprobación
-    // explícita basta desde el umbral de revisión; el umbral automático solo
-    // gobierna los envíos sin aprobación humana por candidatura. El suelo
-    // duro de `umbralEncajeRevision` ya se aplicó arriba (por debajo →
+  if (ev.decision === 'requiere_revision' && app.status === 'approved') {
+    // Decisión expresa de Jon (20-oct-2026): su aprobación explícita basta
+    // desde el umbral de revisión; el umbral automático solo gobierna los
+    // envíos SIN aprobación humana por candidatura. La condición es el
+    // estado `approved` (aprobación humana real), no el modo: en
+    // `ejecutar_automatico` una candidatura aún en `ready_for_review` no
+    // entra aquí y sigue necesitando el umbral automático. El suelo duro
+    // de `umbralEncajeRevision` ya se aplicó arriba (por debajo →
     // bloqueado); sin encaje medido no se promueve.
     const encajeSuficiente = ctx.encaje !== null && ctx.encaje >= politica.reglas.umbralEncajeRevision;
     if (encajeSuficiente) {

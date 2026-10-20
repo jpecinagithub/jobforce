@@ -37,6 +37,7 @@ import {
 } from '@jobforce/docs';
 import type { ProfileFactInput } from '@jobforce/eval';
 import { auditEvent } from './audit.js';
+import { solicitarEnviosAutomaticos } from './auto-send.js';
 import {
   intentarConfigurarFormulario,
   type InspectorFormulario,
@@ -633,13 +634,16 @@ export async function prepararCandidatura(
  * `cumple` y score >= umbralEncajeRevision de la política ACTIVA.
  * Nunca lanza: cada preparación va aislada (un fallo no tumba la búsqueda).
  *
+ * Fase 8.3: tras preparar, en modo `ejecutar_automatico` autorizado se
+ * solicitan solos los envíos que la política permite (ver auto-send.ts);
+ * en cualquier otro modo ese barrido no hace nada.
  */
 export async function prepararElegibles(
   campaignId: string,
   actorId: string | null,
-): Promise<{ preparadas: number; candidatas: number }> {
+): Promise<{ preparadas: number; candidatas: number; enviosSolicitados: number }> {
   const policy = await getEffectivePolicy();
-  if (!policy) return { preparadas: 0, candidatas: 0 };
+  if (!policy) return { preparadas: 0, candidatas: 0, enviosSolicitados: 0 };
   const umbral = policy.policy.reglas.umbralEncajeRevision;
   const rows = await query<{ offer_id: string }>(
     `SELECT offer_id FROM evaluations
@@ -657,5 +661,12 @@ export async function prepararElegibles(
       // que la disparó (búsqueda o re-evaluación).
     }
   }
-  return { preparadas, candidatas: rows.length };
+  let enviosSolicitados = 0;
+  try {
+    const barrido = await solicitarEnviosAutomaticos(campaignId, actorId);
+    enviosSolicitados = barrido.encolados;
+  } catch {
+    // El barrido automático tampoco puede tumbar el flujo que lo disparó.
+  }
+  return { preparadas, candidatas: rows.length, enviosSolicitados };
 }

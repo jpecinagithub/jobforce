@@ -15,7 +15,10 @@
  * de envío (la misma lógica de request-send): si la política lo permite se
  * encola y el worker lo ejecuta; si lo bloquea, la aprobación queda
  * registrada, no se encola nada y se abre una intervención con el motivo.
- * En los demás modos estas rutas solo cambian el estado de revisión.
+ *
+ * Fase 8: el encadenado también aplica en `ejecutar_automatico`: es como
+ * las candidaturas de la banda 70–74 (que esperan en Revisión) se envían
+ * tras la aprobación expresa de Jon. En `investigar` no se encadena.
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -279,13 +282,14 @@ export interface SendChainResult {
 }
 
 /**
- * Tras una aprobación, en modo `preparar_para_revision` se encadena la
- * solicitud de envío reutilizando `solicitarEnvio` (la lógica de
- * request-send): re-evalúa la política completa (checks, cuotas,
- * presupuesto, parada global) y encola si procede.
+ * Tras una aprobación, en modo `preparar_para_revision` o
+ * `ejecutar_automatico` se encadena la solicitud de envío reutilizando
+ * `solicitarEnvio` (la lógica de request-send): re-evalúa la política
+ * completa (checks, cuotas, presupuesto, parada global) y encola si
+ * procede. En automático es la vía de la banda 70–74: la aprobación
+ * expresa de Jon basta desde el umbral de revisión (ver `decidirEnvio`).
  *
- * - Fuera de ese modo devuelve null: la respuesta no cambia (comportamiento
- *   histórico intacto).
+ * - Fuera de esos modos devuelve null: la respuesta no cambia.
  * - Si la política lo bloquea, la aprobación YA registrada se mantiene,
  *   no se encola nada y se abre una intervención con el motivo.
  */
@@ -294,7 +298,13 @@ async function encadenarEnvioTrasAprobacion(
   actorId: string | null,
 ): Promise<SendChainResult | null> {
   const policy = await getEffectivePolicy();
-  if (!policy || policy.policy.modoActivo !== 'preparar_para_revision') return null;
+  if (
+    !policy ||
+    (policy.policy.modoActivo !== 'preparar_para_revision' &&
+      policy.policy.modoActivo !== 'ejecutar_automatico')
+  ) {
+    return null;
+  }
   try {
     const res = await solicitarEnvio(applicationId, { actorId });
     if (res.outcome === 'encolado' || res.outcome === 'repetido') {
@@ -351,8 +361,9 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
   });
 
   // POST /api/applications/:id/approve — Jon aprueba: ready_for_review → approved.
-  // En modo preparar_para_revision encadena la solicitud de envío y la
-  // respuesta lo indica: { send: 'encolado' | 'bloqueado', motivo? }.
+  // En preparar_para_revision y en ejecutar_automatico encadena la
+  // solicitud de envío y la respuesta lo indica:
+  // { send: 'encolado' | 'bloqueado', motivo? }.
   app.post('/api/applications/:id/approve', mutating, async (req, reply) => {
     const { id } = req.params as { id: string };
     try {
