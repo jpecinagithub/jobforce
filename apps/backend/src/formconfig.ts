@@ -18,8 +18,9 @@
  * respuestas guardadas de Jon. Los checkboxes/radio (consentimientos) no
  * se marcan solos: si son requeridos, la candidatura queda pendiente.
  *
- * La inspección es inyectable (tests). En `NODE_ENV=test` sin inyección no
- * se navega nunca: el intento se omite sin tocar el snapshot.
+ * La inspección es inyectable (tests). Fuera de producción
+ * (`NODE_ENV != production`) sin inyección no se navega nunca: el intento
+ * se omite sin tocar el snapshot.
  */
 
 import { query } from '@jobforce/database';
@@ -145,10 +146,12 @@ export const inspeccionarFormularioPersonio: InspectorFormulario = async (url) =
     const intentar = async (u: string): Promise<InspeccionFormulario> => {
       await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 45000 });
       await page.waitForTimeout(3500);
+      // IIFE: un string con la función a secas NO se invoca al evaluarlo
+      // (Playwright devuelve undefined); la expresión debe llamarla.
       const r = await page.evaluate<{ campos: CampoDetectado[]; submitButtonName: string | null }>(
-        EXTRAER_CAMPOS_JS,
+        `(${EXTRAER_CAMPOS_JS})()`,
       );
-      return { urlFinal: u, campos: r.campos ?? [], submitButtonName: r.submitButtonName ?? null };
+      return { urlFinal: u, campos: r?.campos ?? [], submitButtonName: r?.submitButtonName ?? null };
     };
     let resultado = await intentar(url);
     if (resultado.campos.length === 0 && !/\/apply(\?|$)/i.test(url)) {
@@ -166,9 +169,11 @@ export const inspeccionarFormularioPersonio: InspectorFormulario = async (url) =
 function inspectorEfectivo(deps?: { inspector?: InspectorFormulario }): InspectorFormulario | null {
   if (deps?.inspector) return deps.inspector;
   if (testDeps.inspector) return testDeps.inspector;
-  // En tests sin doble inyectado no se navega: la preparación no debe
-  // depender de la red ni de Chromium para ser determinista.
-  if (process.env.NODE_ENV === 'test') return null;
+  // Fail-safe: el inspector real SOLO se usa en producción (el contenedor
+  // fija NODE_ENV=production). En cualquier otro entorno sin doble
+  // inyectado no se navega: la preparación no debe depender de la red ni
+  // de Chromium para ser determinista.
+  if (process.env.NODE_ENV !== 'production') return null;
   return inspeccionarFormularioPersonio;
 }
 
@@ -508,6 +513,11 @@ export async function intentarConfigurarFormulario(
   let inspeccion: InspeccionFormulario;
   try {
     inspeccion = await inspector(app.offer_url);
+    if (!inspeccion.campos || inspeccion.campos.length === 0) {
+      // Una página sin ningún campo no es un formulario utilizable: se
+      // trata como inspección fallida, jamás como formConfig vacío.
+      throw new Error('la inspección no detectó ningún campo de formulario');
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'error desconocido';
     await guardarPendiente(
