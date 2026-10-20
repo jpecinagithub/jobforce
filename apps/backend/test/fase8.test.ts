@@ -450,6 +450,9 @@ describe('Fase 8.2 — scheduler de búsquedas diarias', () => {
     await seedPerfilActivo();
     setCampaignTestDeps({
       createExaClient: (): ExaClient => ({
+        async getContents() {
+          return { texts: new Map<string, string>(), costDollars: 0 };
+        },
         async search() {
           return {
             requestId: 'req-f8',

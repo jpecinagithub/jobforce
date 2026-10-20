@@ -25,6 +25,9 @@ import type { EvaluationResult } from '@jobforce/eval';
 /** Cliente Exa falso: determinista, sin red. Falla con la consulta 'falla'. */
 function makeFakeClient(onCall?: () => void): ExaClient {
   return {
+    async getContents() {
+      return { texts: new Map<string, string>(), costDollars: 0 };
+    },
     async search(opts): Promise<ExaSearchResponse> {
       onCall?.();
       if (opts.query === 'falla') {

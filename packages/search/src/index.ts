@@ -39,6 +39,8 @@ export interface ExaResult {
   publishedDate?: string;
   author?: string;
   highlights?: string[];
+  /** Texto completo de la página según Exa (contents.text). */
+  text?: string;
 }
 
 export interface ExaSearchResponse {
@@ -47,11 +49,20 @@ export interface ExaSearchResponse {
   costDollars: number;
 }
 
+export interface ExaContentsResponse {
+  /** url → texto completo de la página. */
+  texts: Map<string, string>;
+  costDollars: number;
+}
+
 export interface ExaClient {
   search(opts: ExaSearchOptions): Promise<ExaSearchResponse>;
+  /** Texto completo de URLs ya conocidas (endpoint /contents de Exa). */
+  getContents(urls: string[]): Promise<ExaContentsResponse>;
 }
 
 const EXA_SEARCH_URL = 'https://api.exa.ai/search';
+const EXA_CONTENTS_URL = 'https://api.exa.ai/contents';
 const SEARCH_TIMEOUT_MS = 30_000;
 
 const JOB_TITLE_WORDS =
@@ -124,7 +135,15 @@ export async function fetchOfferText(url: string, timeoutMs = 15_000): Promise<s
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JOBFORCE/1.0)' },
+      headers: {
+        // Cabeceras de navegador: muchos portales rechazan agentes
+        // evidentes (406/403). Aun así, los muros anti-bots serios solo
+        // los franquea el texto que trae Exa; esto es el último recurso.
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en,es;q=0.8',
+      },
       signal: controller.signal,
       redirect: 'follow',
     });
@@ -213,7 +232,11 @@ export function createExaClient(apiKey: string): ExaClient {
           startPublishedDate: new Date(
             Date.now() - RECENCY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
           ).toISOString(),
-          contents: { highlights: true },
+          // highlights + texto completo: el texto alimenta la evaluación
+          // (mejora 20-oct-2026) porque Exa sí puede leer las páginas que
+          // bloquean a nuestro servidor (ReliefWeb devuelve 406/403 a
+          // peticiones directas). El coste real viene en costDollars.
+          contents: { highlights: true, text: { maxCharacters: 8000 } },
         }),
         signal: controller.signal,
       });
@@ -247,6 +270,7 @@ export function createExaClient(apiKey: string): ExaClient {
         publishedDate?: string | null;
         author?: string | null;
         highlights?: string[] | null;
+        text?: string | null;
       }>;
       requestId?: string;
       costDollars?: { total?: number } | null;
@@ -264,6 +288,7 @@ export function createExaClient(apiKey: string): ExaClient {
       ...(r.publishedDate ? { publishedDate: r.publishedDate } : {}),
       ...(r.author ? { author: r.author } : {}),
       ...(Array.isArray(r.highlights) ? { highlights: r.highlights } : {}),
+      ...(typeof r.text === 'string' && r.text.trim() ? { text: r.text } : {}),
     }));
 
     return {
@@ -273,7 +298,45 @@ export function createExaClient(apiKey: string): ExaClient {
     };
   }
 
-  return { search };
+  async function getContents(urls: string[]): Promise<ExaContentsResponse> {
+    const texts = new Map<string, string>();
+    if (urls.length === 0) return { texts, costDollars: 0 };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(EXA_CONTENTS_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({ urls, text: { maxCharacters: 8000 } }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Exa contents: error de red: ${detail}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      throw new Error(`Exa contents: HTTP ${res.status} ${res.statusText}`);
+    }
+    const body = (await res.json()) as {
+      results?: Array<{ url?: string; text?: string | null }>;
+      costDollars?: { total?: number } | null;
+    };
+    for (const r of body.results ?? []) {
+      if (r.url && typeof r.text === 'string' && r.text.trim()) {
+        texts.set(r.url, r.text);
+      }
+    }
+    return { texts, costDollars: body.costDollars?.total ?? 0 };
+  }
+
+  return { search, getContents };
 }
 
 const MAX_QUERIES = 5;

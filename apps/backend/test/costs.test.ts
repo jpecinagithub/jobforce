@@ -26,6 +26,9 @@ let auth: AuthContext;
 
 function makeFakeClient(falla: boolean): ExaClient {
   return {
+    async getContents() {
+      return { texts: new Map<string, string>(), costDollars: 0 };
+    },
     async search(opts): Promise<ExaSearchResponse> {
       if (falla) throw new Error('fallo simulado de Exa');
       return {

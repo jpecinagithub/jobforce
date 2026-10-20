@@ -168,7 +168,7 @@ describe('createExaClient', () => {
     assert.equal(seenBody.type, 'auto');
     assert.equal(seenBody.numResults, 5);
     assert.deepEqual(seenBody.excludeDomains, ['linkedin.com', 'exa.ai', 'rocketreach.co', 'zoominfo.com', 'signalhire.com', 'theorg.com', 'apollo.io', 'lusha.com']);
-    assert.deepEqual(seenBody.contents, { highlights: true });
+    assert.deepEqual(seenBody.contents, { highlights: true, text: { maxCharacters: 8000 } });
     // Actualidad: startPublishedDate dentro de la ventana de 30 días.
     const desde = new Date(String(seenBody.startPublishedDate)).getTime();
     const ahora = Date.now();
@@ -186,6 +186,49 @@ describe('createExaClient', () => {
     assert.deepEqual(res.results[0].highlights, ['CFO con experiencia en IFRS']);
     assert.ok(!('publishedDate' in res.results[1]));
     assert.ok(!('highlights' in res.results[1]));
+  });
+
+  it('propaga el texto completo del resultado cuando Exa lo trae', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          requestId: 'x',
+          results: [
+            { id: 'r1', title: 'FM', url: 'https://example.com/1', text: 'Cuerpo completo de la oferta…' },
+            { id: 'r2', title: 'FM2', url: 'https://example.com/2', text: '' },
+          ],
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+    const client = createExaClient('clave-ficticia');
+    const res = await client.search({ query: 'q', numResults: 2 });
+    assert.equal(res.results[0].text, 'Cuerpo completo de la oferta…');
+    assert.ok(!('text' in res.results[1]));
+  });
+
+  it('getContents devuelve el mapa url→texto y el coste', async () => {
+    let seenUrl = '';
+    globalThis.fetch = (async (url: unknown) => {
+      seenUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          costDollars: { total: 0.002 },
+          results: [
+            { url: 'https://example.com/a', text: 'Texto A' },
+            { url: 'https://example.com/b', text: '' },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    const client = createExaClient('clave-ficticia');
+    const res = await client.getContents(['https://example.com/a', 'https://example.com/b']);
+    assert.equal(seenUrl, 'https://api.exa.ai/contents');
+    assert.equal(res.texts.get('https://example.com/a'), 'Texto A');
+    assert.equal(res.texts.has('https://example.com/b'), false);
+    assert.equal(res.costDollars, 0.002);
+    const vacio = await client.getContents([]);
+    assert.equal(vacio.texts.size, 0);
   });
 
   it('costDollars es 0 si la API no devuelve costDollars', async () => {

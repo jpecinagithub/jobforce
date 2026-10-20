@@ -452,7 +452,13 @@ export async function ejecutarBusquedaCampana(
 
         let insertedCount = 0;
         let filteredCount = 0;
-        const newOffers: Array<{ id: string; title: string; url: string; highlights: string[] }> = [];
+        const newOffers: Array<{
+          id: string;
+          title: string;
+          url: string;
+          highlights: string[];
+          exaText?: string;
+        }> = [];
         for (const result of resp.results) {
           // Calidad de búsqueda: Exa a veces devuelve PERFILES de personas
           // (su directorio «people») como si fueran ofertas; se descartan
@@ -494,20 +500,27 @@ export async function ejecutarBusquedaCampana(
               title: row.title ?? '',
               url: row.url,
               highlights: asStringArray(row.highlights),
+              exaText: result.text,
             });
           }
         }
         const duplicatesCount = resp.results.length - insertedCount - filteredCount;
 
         // Texto completo de las ofertas nuevas (mejora 20-oct-2026): los
-        // extractos de Exa dejaban demasiadas ofertas en «sin evidencia»;
-        // se descarga la página y se evalúa con el cuerpo entero. El texto
-        // se guarda en offers.raw para futuras re-evaluaciones sin coste.
-        // Un fallo de descarga no bloquea: se evalúa con los extractos.
+        // extractos de Exa dejaban demasiadas ofertas en «sin evidencia».
+        // Fuente principal: el texto que trae la propia respuesta de Exa
+        // (sus servidores sí leen las páginas que bloquean al nuestro:
+        // ReliefWeb devuelve 406/403 a peticiones directas). Respaldo: la
+        // descarga directa. El texto se guarda en offers.raw (la fila ya
+        // guarda la respuesta de Exa, texto incluido) y en full_text.
+        // Un fallo no bloquea: se evalúa solo con los extractos.
         const fullTexts = new Map<string, string>();
         try {
           const fetched = await Promise.all(
-            newOffers.map(async (o) => ({ id: o.id, text: await fetchOfferText(o.url) })),
+            newOffers.map(async (o) => ({
+              id: o.id,
+              text: o.exaText ?? (await fetchOfferText(o.url)),
+            })),
           );
           for (const f of fetched) {
             if (f.text) {
