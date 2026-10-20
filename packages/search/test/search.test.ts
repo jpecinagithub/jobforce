@@ -12,6 +12,8 @@ import {
   checkUrlAlive,
   looksLikePersonProfile,
   extractApplicationContact,
+  selectQueries,
+  fetchOfferText,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
 } from '../src/index.js';
 import { defaultCriteria, type CampaignCriteria } from '@jobforce/domain';
@@ -264,6 +266,55 @@ describe('extractApplicationContact', () => {
     );
     assert.equal(extractApplicationContact('Finance Manager', ['Sin contacto por correo.']), null);
     assert.equal(extractApplicationContact(null, null), null);
+  });
+});
+
+describe('selectQueries', () => {
+  const diez = ['q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7', 'q8', 'q9', 'q10'];
+
+  it('con ≤5 consultas devuelve todas', () => {
+    assert.deepEqual(selectQueries(['a', 'b']), ['a', 'b']);
+    assert.deepEqual(selectQueries(diez.slice(0, 5)), diez.slice(0, 5));
+  });
+
+  it('con 10 consultas rota por día: dos días seguidos cubren las 10', () => {
+    const d1 = selectQueries(diez, new Date('2026-10-20T08:00:00Z'));
+    const d2 = selectQueries(diez, new Date('2026-10-21T08:00:00Z'));
+    assert.equal(d1.length, 5);
+    assert.equal(d2.length, 5);
+    assert.deepEqual([...d1, ...d2].sort(), [...diez].sort());
+    // El mismo día siempre elige las mismas (determinista).
+    assert.deepEqual(selectQueries(diez, new Date('2026-10-20T23:00:00Z')), d1);
+  });
+});
+
+describe('fetchOfferText', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('extrae texto legible del HTML (sin scripts ni estilos)', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        '<html><head><style>.x{color:red}</style><script>var a=1;</script></head>' +
+          '<body><h1>Finance Manager</h1><p>We are hiring &amp; growing.</p><p>Apply now.</p></body></html>',
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+      )) as typeof fetch;
+    const text = await fetchOfferText('https://example.com/job');
+    assert.ok(text && text.includes('Finance Manager'));
+    assert.ok(text && text.includes('We are hiring & growing.'));
+    assert.ok(text && !text.includes('var a=1'));
+    assert.ok(text && !text.includes('color:red'));
+  });
+
+  it('devuelve null con HTTP de error o contenido no HTML', async () => {
+    globalThis.fetch = (async () =>
+      new Response('not found', { status: 404, headers: { 'Content-Type': 'text/html' } })) as typeof fetch;
+    assert.equal(await fetchOfferText('https://example.com/404'), null);
+    globalThis.fetch = (async () =>
+      new Response('{"a":1}', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    assert.equal(await fetchOfferText('https://example.com/api'), null);
   });
 });
 

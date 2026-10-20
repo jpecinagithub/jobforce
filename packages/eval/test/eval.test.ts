@@ -275,6 +275,39 @@ describe('evaluateOffer', () => {
     assert.equal(res.mandatory_verdict, 'cumple');
   });
 
+  it('texto completo: lo que el extracto no prueba, el cuerpo del anuncio sí (ONG)', () => {
+    const criteria = defaultCriteria();
+    // Requisito de empleadora ONG española, como en la campaña real.
+    criteria.mandatory.push({
+      id: 'ong_espanola',
+      kind: 'keyword',
+      params: { any_of: ['médicos sin fronteras', 'msf'] },
+      description: 'La empleadora es una ONG española',
+    });
+    const base = {
+      title: 'Finance Manager — Nairobi',
+      url: 'https://example.com/jobs/ong-ft',
+      highlights: ['International NGO seeks a Finance Manager for its Kenya office. Apply online.'],
+    };
+    const sinTexto = evaluateOffer(base, criteria, FACTS);
+    assert.equal(
+      sinTexto.mandatory_details.find((d) => d.requisito_id === 'ong_espanola')?.estado,
+      'sin_evidencia',
+    );
+    const conTexto = evaluateOffer(
+      {
+        ...base,
+        fullText:
+          'This position is with Médicos Sin Fronteras (MSF), the Spanish section of the international medical humanitarian organisation. The Finance Manager will lead the finance team of the Nairobi coordination office.',
+      },
+      criteria,
+      FACTS,
+    );
+    const d = conTexto.mandatory_details.find((x) => x.requisito_id === 'ong_espanola');
+    assert.equal(d?.estado, 'cumple');
+    assert.ok(d && d.evidencia.includes('Médicos Sin Fronteras'));
+  });
+
   it('idioma: oferta redactada en castellano cumple si el castellano está aceptado (campaña ONGs)', () => {
     const criteria = defaultCriteria();
     const langReq = criteria.mandatory.find((r) => r.id === 'ingles');

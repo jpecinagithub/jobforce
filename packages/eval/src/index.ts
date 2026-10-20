@@ -27,6 +27,14 @@ export interface EvalOfferInput {
   title: string;
   url: string;
   highlights: string[];
+  /**
+   * Texto completo de la página de la oferta, cuando se ha podido
+   * descargar (mejora del 20-oct-2026: los extractos de Exa dejaban el
+   * 60 % de las ofertas de ONG en «sin evidencia» porque el dato clave
+   * —ONG empleadora, destino, idioma— vive en el cuerpo del anuncio).
+   * Se suma al corpus y a la búsqueda de evidencias (por frases).
+   */
+  fullText?: string;
 }
 
 /** Hecho del perfil (versión activa) en formato reducido. */
@@ -82,9 +90,18 @@ export function norm(s: string): string {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
-/** Corpus de búsqueda: título + extractos, normalizado. */
+/** Corpus de búsqueda: título + extractos + texto completo si lo hay. */
 function corpusOf(offer: EvalOfferInput): string {
-  return norm([offer.title, ...offer.highlights].join(' '));
+  return norm([offer.title, ...offer.highlights, offer.fullText ?? ''].join(' '));
+}
+
+/** El texto completo troceado en frases/párrafos citables como evidencia. */
+function fullTextChunks(offer: EvalOfferInput): string[] {
+  if (!offer.fullText) return [];
+  return offer.fullText
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 3);
 }
 
 /** Título normalizado (para detectar menciones "directas" en el título). */
@@ -98,7 +115,7 @@ function titleNormOf(offer: EvalOfferInput): string {
  * colapsados). "" si no hay coincidencia.
  */
 function findEvidence(offer: EvalOfferInput, needles: string[]): string {
-  const hay = [offer.title, ...offer.highlights];
+  const hay = [offer.title, ...offer.highlights, ...fullTextChunks(offer)];
   for (const n of needles) {
     const needle = norm(n);
     if (!needle) continue;
@@ -345,7 +362,7 @@ function corpusLanguage(corpus: string): 'en' | 'es' | null {
 
 /** La frase de la oferta con más señal del idioma dado (como evidencia). */
 function languageEvidence(offer: EvalOfferInput, lang: 'en' | 'es'): string {
-  const sources = [offer.title, ...offer.highlights];
+  const sources = [offer.title, ...offer.highlights, ...fullTextChunks(offer)];
   let best = '';
   let bestScore = -1;
   for (const s of sources) {

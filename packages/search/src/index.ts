@@ -77,6 +77,70 @@ export function looksLikePersonProfile(title: string | null | undefined): boolea
   return words.every((w) => /^[A-Za-z''-]+$/.test(w));
 }
 
+/**
+ * Elige las consultas del día: si la campaña guarda más de `max`, rota
+ * la ventana por día (con 10 consultas y max 5, se alternan dos bloques
+ * y en dos días se cubren todas). Determinista por fecha UTC.
+ */
+export function selectQueries(queries: string[], date: Date = new Date(), max = 5): string[] {
+  if (queries.length <= max) return queries.slice(0, max);
+  const dayIndex = Math.floor(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86_400_000,
+  );
+  const start = (dayIndex * max) % queries.length;
+  const out: string[] = [];
+  for (let i = 0; i < max; i++) out.push(queries[(start + i) % queries.length]);
+  return out;
+}
+
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<\/(p|div|li|tr|h[1-6]|section|article)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n')
+    .trim();
+}
+
+/**
+ * Descarga la página de una oferta y devuelve su texto legible
+ * (máx. 8000 caracteres) o null si no se puede (error, no-HTML, vacío).
+ * Alimenta la evaluación con texto completo: los extractos de Exa
+ * dejaban demasiadas ofertas en «sin evidencia». Nunca lanza.
+ */
+export async function fetchOfferText(url: string, timeoutMs = 15_000): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JOBFORCE/1.0)' },
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+    if (!res.ok) return null;
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('text/html') && !ct.includes('text/plain') && ct !== '') return null;
+    const body = await res.text();
+    const text = htmlToText(body);
+    return text ? text.slice(0, 8000) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const NO_REPLY_RE = /^(no[-_.]?reply|donotreply|mailer-daemon|postmaster)@/i;
 

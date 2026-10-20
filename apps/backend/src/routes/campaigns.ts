@@ -38,6 +38,8 @@ import {
   generateQueries,
   looksLikePersonProfile,
   extractApplicationContact,
+  selectQueries,
+  fetchOfferText,
   type ExaClient,
 } from '@jobforce/search';
 import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
@@ -196,7 +198,7 @@ const LaunchSearchBody = z.object({
     .array(z.string().trim().min(1, 'la consulta no puede estar vacía').max(500))
     .max(5, 'máximo 5 consultas por lanzamiento')
     .optional(),
-  num_results: z.number().int().min(1).max(10).default(5),
+  num_results: z.number().int().min(1).max(10).default(10),
 });
 
 const authOnly = { preHandler: [requireSession] };
@@ -374,14 +376,20 @@ export async function ejecutarBusquedaCampana(
     }
     const criteria = campaignRow.criteria as CampaignCriteria;
 
-    // 2) Consultas: las del cuerpo o las generadas desde los criterios (máx 5).
+    // 2) Consultas (máx 5 por tirada): las del cuerpo; si no, las de la
+    // campaña ROTADAS por día (puede guardar más de 5 y se van alternando);
+    // si la campaña no define ninguna, las plantillas de generateQueries.
     const bodyQueries = (opts.queries ?? []).slice(0, 5);
     const resolvedQueries =
-      bodyQueries.length > 0 ? bodyQueries : generateQueries(criteria).slice(0, 5);
+      bodyQueries.length > 0
+        ? bodyQueries
+        : criteria.queries.length > 0
+          ? selectQueries(criteria.queries, new Date(), 5)
+          : generateQueries(criteria).slice(0, 5);
     if (resolvedQueries.length === 0) {
       return { ok: false, status: 400, error: 'sin_consultas' };
     }
-    const numResults = opts.numResults ?? 5;
+    const numResults = opts.numResults ?? 10;
 
     // 3) Presupuesto: estimación conservadora ANTES de tocar Exa (tope de
     //    campaña heredado de Fase 2) + presupuestos globales diario/mensual
@@ -491,9 +499,37 @@ export async function ejecutarBusquedaCampana(
         }
         const duplicatesCount = resp.results.length - insertedCount - filteredCount;
 
+        // Texto completo de las ofertas nuevas (mejora 20-oct-2026): los
+        // extractos de Exa dejaban demasiadas ofertas en «sin evidencia»;
+        // se descarga la página y se evalúa con el cuerpo entero. El texto
+        // se guarda en offers.raw para futuras re-evaluaciones sin coste.
+        // Un fallo de descarga no bloquea: se evalúa con los extractos.
+        const fullTexts = new Map<string, string>();
+        try {
+          const fetched = await Promise.all(
+            newOffers.map(async (o) => ({ id: o.id, text: await fetchOfferText(o.url) })),
+          );
+          for (const f of fetched) {
+            if (f.text) {
+              fullTexts.set(f.id, f.text);
+              await query(`UPDATE offers SET raw = raw || $2::jsonb WHERE id = $1`, [
+                f.id,
+                JSON.stringify({ full_text: f.text }),
+              ]);
+            }
+          }
+        } catch {
+          // Sin texto completo se evalúa como antes; nunca bloquea la búsqueda.
+        }
+
         for (const offer of newOffers) {
           const ev = evaluate(
-            { title: offer.title, url: offer.url, highlights: offer.highlights },
+            {
+              title: offer.title,
+              url: offer.url,
+              highlights: offer.highlights,
+              fullText: fullTexts.get(offer.id),
+            },
             criteria,
             profileFacts,
           );
