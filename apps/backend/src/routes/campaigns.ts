@@ -39,6 +39,7 @@ import {
   type ExaClient,
 } from '@jobforce/search';
 import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
+import { prepararCandidatura, prepararElegibles } from '../prepare.js';
 import {
   conectorDisponible,
   presupuestoDisponible,
@@ -207,6 +208,8 @@ interface OfferRow {
   score: string | null;
   breakdown: unknown;
   mandatory_details?: unknown;
+  application_id?: string | null;
+  application_status?: string | null;
 }
 
 function toIso(d: Date): string {
@@ -591,12 +594,24 @@ export async function registerCampaignRoutes(
       }
     }
 
+    // Preparación automática (Fase 7): las ofertas que cumplen los
+    // obligatorios y alcanzan el umbral de revisión de la política activa
+    // quedan preparadas como candidaturas en la cola de revisión. Aislado:
+    // un fallo aquí nunca tumba la búsqueda.
+    let preparadas = 0;
+    try {
+      const sweep = await prepararElegibles(id, req.authSession?.userId ?? null);
+      preparadas = sweep.preparadas;
+    } catch {
+      // La preparación se reintenta con el disparo manual o la re-evaluación.
+    }
+
     await auditEvent({
       actorId: req.authSession?.userId ?? null,
       action: 'search_launched',
       entityType: 'campaign',
       entityId: id,
-      details: { queries: resolvedQueries, total_cost_usd: totalCost },
+      details: { queries: resolvedQueries, total_cost_usd: totalCost, candidaturas_preparadas: preparadas },
     });
     return reply.send({ searches: summaries, total_cost_usd: totalCost });
   });
@@ -615,10 +630,13 @@ export async function registerCampaignRoutes(
       `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
               o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
               o.url_ok, o.url_checked_at,
-              e.mandatory_verdict, e.score, e.breakdown
+              e.mandatory_verdict, e.score, e.breakdown,
+              a.id AS application_id, a.status AS application_status
          FROM offers o
          LEFT JOIN evaluations e
            ON e.offer_id = o.id AND e.campaign_id = o.campaign_id
+         LEFT JOIN applications a
+           ON a.offer_id = o.id AND a.campaign_id = o.campaign_id
         WHERE o.campaign_id = $1
         ORDER BY o.retrieved_at DESC`,
       [id],
@@ -630,6 +648,9 @@ export async function registerCampaignRoutes(
         company: o.company,
         url: o.url,
         url_ok: o.url_ok,
+        application: o.application_id
+          ? { id: o.application_id, status: o.application_status }
+          : null,
         canonical_url: o.canonical_url,
         published_date: o.published_date,
         retrieved_at: toIso(o.retrieved_at),
@@ -654,10 +675,13 @@ export async function registerCampaignRoutes(
     const rows = await query<OfferRow>(
       `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
               o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
-              e.mandatory_verdict, e.score, e.breakdown, e.mandatory_details
+              e.mandatory_verdict, e.score, e.breakdown, e.mandatory_details,
+              a.id AS application_id, a.status AS application_status
          FROM offers o
          LEFT JOIN evaluations e
            ON e.offer_id = o.id AND e.campaign_id = o.campaign_id
+         LEFT JOIN applications a
+           ON a.offer_id = o.id AND a.campaign_id = o.campaign_id
         WHERE o.id = $1 AND o.campaign_id = $2`,
       [offerId, id],
     );
@@ -675,6 +699,9 @@ export async function registerCampaignRoutes(
         published_date: offer.published_date,
         retrieved_at: toIso(offer.retrieved_at),
         highlights: offer.highlights,
+        application: offer.application_id
+          ? { id: offer.application_id, status: offer.application_status }
+          : null,
       },
       evaluation:
         offer.mandatory_verdict === null
@@ -686,6 +713,47 @@ export async function registerCampaignRoutes(
               breakdown: offer.breakdown,
             },
     };
+  });
+
+  // POST /api/campaigns/:id/offers/:offerId/prepare — preparación manual
+  // (Fase 7): acción expresa de Jon. Prepara la candidatura de una oferta
+  // evaluada AUNQUE no supere el umbral automático. Idempotente.
+  app.post('/api/campaigns/:id/offers/:offerId/prepare', mutating, async (req, reply) => {
+    const { id, offerId } = req.params as { id: string; offerId: string };
+    if (!checkCampaignId(id) || !checkCampaignId(offerId)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const campaign = await getCampaignOr404(id);
+    if (!campaign) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    const res = await prepararCandidatura(id, offerId, {
+      actorId: req.authSession?.userId ?? null,
+    });
+    if (res.motivo === 'oferta_no_encontrada') {
+      return reply.code(404).send({ error: 'oferta_no_encontrada' });
+    }
+    if (res.motivo === 'oferta_sin_evaluacion') {
+      return reply.code(409).send({ error: 'oferta_sin_evaluacion' });
+    }
+    if (res.motivo === 'sin_perfil_activo_o_incompleto') {
+      return reply.code(409).send({ error: 'sin_perfil_activo' });
+    }
+    const rows = await query<{ id: string; status: string; portal: string | null; failure_reason: string | null }>(
+      `SELECT id, status, portal, failure_reason FROM applications WHERE id = $1`,
+      [res.applicationId],
+    );
+    const appRow = rows[0];
+    return reply.code(res.creada ? 201 : 200).send({
+      application: {
+        id: appRow.id,
+        status: appRow.status,
+        portal: appRow.portal,
+        failureReason: appRow.failure_reason,
+      },
+      creada: res.creada,
+      ...(res.motivo ? { motivo: res.motivo } : {}),
+    });
   });
 
   // POST /api/campaigns/:id/evaluate — re-evalúa todas las ofertas de la campaña.
@@ -738,6 +806,13 @@ export async function registerCampaignRoutes(
           JSON.stringify(ev.breakdown),
         ],
       );
+    }
+    // Preparación automática (Fase 7): tras re-evaluar, las que cumplen y
+    // alcanzan el umbral quedan preparadas. Aislado como en la búsqueda.
+    try {
+      await prepararElegibles(id, req.authSession?.userId ?? null);
+    } catch {
+      // Sin efectos sobre la respuesta de la re-evaluación.
     }
     return reply.send({ evaluated: offers.length });
   });

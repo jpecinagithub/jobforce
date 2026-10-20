@@ -7,6 +7,7 @@
     "@jobforce/config": "workspace:*",
     "@jobforce/costs": "workspace:*",
     "@jobforce/database": "workspace:*",
+    "@jobforce/docs": "workspace:*",
     "@jobforce/domain": "workspace:*",
     "@jobforce/eval": "workspace:*",
     "@jobforce/search": "workspace:*",
