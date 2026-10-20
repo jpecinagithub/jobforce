@@ -29,7 +29,7 @@ import type {
   PreferenceKey,
 } from '@jobforce/domain';
 import { defaultCriteria } from '@jobforce/domain';
-import { query } from '@jobforce/database';
+import { query, withTransaction } from '@jobforce/database';
 import {
   canonicalUrl,
   checkUrlAlive,
@@ -1020,5 +1020,75 @@ export async function registerCampaignRoutes(
       details: { ofertas: cumple.length, descartes: descartes.length },
     });
     return reply.send({ report });
+  });
+
+  // DELETE /api/campaigns/:id — borrado definitivo a petición de Jon
+  // (20-oct-2026). La cascada de la BD elimina ofertas, búsquedas,
+  // evaluaciones, candidaturas y documentos. El libro de costes se conserva
+  // desvinculado (el gasto ocurrió y su registro es inmutable); los
+  // mensajes de Gmail y las intervenciones también se desvinculan.
+  app.delete('/api/campaigns/:id', mutating, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const campaign = await getCampaignOr404(id);
+    if (!campaign) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    // Protección: una campaña con envíos reales (en curso o ya enviados) no
+    // se borra: es el historial de candidaturas reales de Jon.
+    const enviadas = await query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM applications
+        WHERE campaign_id = $1 AND status IN ('submitting', 'submitted')`,
+      [id],
+    );
+    if (Number(enviadas[0].count) > 0) {
+      return reply.code(409).send({ error: 'campana_con_envios_reales' });
+    }
+    const conteos = await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE cost_events SET offer_id = NULL
+          WHERE offer_id IN (SELECT id FROM offers WHERE campaign_id = $1)`,
+        [id],
+      );
+      await client.query(
+        `UPDATE cost_events SET application_id = NULL
+          WHERE application_id IN (SELECT id FROM applications WHERE campaign_id = $1)`,
+        [id],
+      );
+      await client.query(`UPDATE cost_events SET campaign_id = NULL WHERE campaign_id = $1`, [id]);
+      await client.query(
+        `UPDATE gmail_messages SET application_id = NULL
+          WHERE application_id IN (SELECT id FROM applications WHERE campaign_id = $1)`,
+        [id],
+      );
+      await client.query(
+        `UPDATE interventions SET application_id = NULL
+          WHERE application_id IN (SELECT id FROM applications WHERE campaign_id = $1)`,
+        [id],
+      );
+      const prev = await client.query<{ offers: string; searches: string; applications: string }>(
+        `SELECT (SELECT COUNT(*) FROM offers WHERE campaign_id = $1) AS offers,
+                (SELECT COUNT(*) FROM searches WHERE campaign_id = $1) AS searches,
+                (SELECT COUNT(*) FROM applications WHERE campaign_id = $1) AS applications`,
+        [id],
+      );
+      await client.query(`DELETE FROM campaigns WHERE id = $1`, [id]);
+      return prev.rows[0];
+    });
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'campaign_deleted',
+      entityType: 'campaign',
+      entityId: id,
+      details: {
+        name: campaign.name,
+        offers: Number(conteos.offers),
+        searches: Number(conteos.searches),
+        applications: Number(conteos.applications),
+      },
+    });
+    return reply.send({ ok: true });
   });
 }

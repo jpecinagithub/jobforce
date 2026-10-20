@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { apiGet } from '@/lib/api';
 import type { Campaign } from '@jobforce/domain';
 import NewCampaignForm from '@/components/NewCampaignForm';
+import DeleteCampaignButton from '@/components/DeleteCampaignButton';
 import { fmtUsd, statusBadgeClass, STATUS_LABELS } from '@/lib/campaigns';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +41,7 @@ export default async function CampanasPage() {
               <th>Gasto Exa</th>
               <th>Ofertas</th>
               <th>Búsquedas</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -59,6 +61,9 @@ export default async function CampanasPage() {
                 </td>
                 <td>{c.offers_count ?? '—'}</td>
                 <td>{c.searches_count ?? '—'}</td>
+                <td>
+                  <DeleteCampaignButton campaignId={c.id} campaignName={c.name} />
+                </td>
               </tr>
             ))}
           </tbody>

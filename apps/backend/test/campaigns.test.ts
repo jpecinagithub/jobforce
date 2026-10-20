@@ -443,4 +443,78 @@ describe('campañas sin clave de Exa', () => {
     assert.equal(res.statusCode, 503);
     assert.deepEqual(res.json(), { error: 'exa_no_configurado' });
   });
+
+  it('DELETE /api/campaigns/:id borra la campaña y desvincula el libro de costes', async () => {
+    const id = await createCampaign(app, auth);
+    await query(
+      `INSERT INTO offers (campaign_id, canonical_url, url, title, company)
+       VALUES ($1, 'https://example.com/1', 'https://example.com/1', 'CFO', 'Acme')`,
+      [id],
+    );
+    await query(
+      `INSERT INTO cost_events (campaign_id, categoria, cantidad_usd, detalles)
+       VALUES ($1, 'exa_search', 0.035, '{}'::jsonb)`,
+      [id],
+    );
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/campaigns/${id}`,
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.deepEqual(res.json(), { ok: true });
+
+    const despues = await app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${id}`,
+      headers: authed(auth),
+    });
+    assert.equal(despues.statusCode, 404);
+    const ofertas = await query('SELECT COUNT(*) AS n FROM offers WHERE campaign_id = $1', [id]);
+    assert.equal(Number(ofertas[0].n), 0);
+    // El gasto queda registrado pero desvinculado de la campaña borrada.
+    const costes = await query<{ campaign_id: string | null }>(
+      'SELECT campaign_id FROM cost_events',
+    );
+    assert.equal(costes.length, 1);
+    assert.equal(costes[0].campaign_id, null);
+  });
+
+  it('DELETE /api/campaigns/:id con candidaturas enviadas → 409 y no borra', async () => {
+    const id = await createCampaign(app, auth);
+    const oferta = await query<{ id: string }>(
+      `INSERT INTO offers (campaign_id, canonical_url, url, title, company)
+       VALUES ($1, 'https://example.com/2', 'https://example.com/2', 'CFO', 'Acme')
+       RETURNING id`,
+      [id],
+    );
+    await query(
+      `INSERT INTO applications (campaign_id, offer_id, status)
+       VALUES ($1, $2, 'submitted')`,
+      [id, oferta[0].id],
+    );
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/campaigns/${id}`,
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 409);
+    assert.deepEqual(res.json(), { error: 'campana_con_envios_reales' });
+    const sigue = await app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${id}`,
+      headers: authed(auth),
+    });
+    assert.equal(sigue.statusCode, 200);
+  });
+
+  it('DELETE /api/campaigns/:id inexistente → 404', async () => {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/api/campaigns/00000000-0000-4000-8000-000000000000',
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 404);
+  });
 });
