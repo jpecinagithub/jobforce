@@ -11,6 +11,7 @@ import {
   canonicalUrl,
   checkUrlAlive,
   looksLikePersonProfile,
+  extractApplicationContact,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
 } from '../src/index.js';
 import { defaultCriteria, type CampaignCriteria } from '@jobforce/domain';
@@ -244,6 +245,25 @@ describe('looksLikePersonProfile', () => {
     ]) {
       assert.equal(looksLikePersonProfile(t), false, String(t));
     }
+  });
+});
+
+describe('extractApplicationContact', () => {
+  it('extrae el email de aplicación y su frase (caso real Mundubat)', () => {
+    const c = extractApplicationContact('Coordinador/a expatriado/a', [
+      'Las personas interesadas deberán enviar su candidatura antes del 23 de octubre a candidaturas@mundubat.org indicando en el asunto “Coordinador/a África Occ.”.',
+    ]);
+    assert.equal(c?.email, 'candidaturas@mundubat.org');
+    assert.ok(c && c.notes.includes('asunto'));
+  });
+
+  it('ignora buzones no-reply y devuelve null si no hay email', () => {
+    assert.equal(
+      extractApplicationContact('Finance Manager', ['Avisos automáticos: no-reply@empresa.com']),
+      null,
+    );
+    assert.equal(extractApplicationContact('Finance Manager', ['Sin contacto por correo.']), null);
+    assert.equal(extractApplicationContact(null, null), null);
   });
 });
 

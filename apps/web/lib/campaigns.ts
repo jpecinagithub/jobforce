@@ -122,6 +122,8 @@ export interface OfferSummary {
   url: string;
   /** null = sin comprobar; true = viva; false = rota. */
   url_ok: boolean | null;
+  /** Email de aplicación si el anuncio lo trae (canal de envío por correo). */
+  application_email?: string | null;
   /** Candidatura enlazada (Fase 7), si ya se preparó una para esta oferta. */
   application: {
     id: string;

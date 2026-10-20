@@ -77,6 +77,39 @@ export function looksLikePersonProfile(title: string | null | undefined): boolea
   return words.every((w) => /^[A-Za-z''-]+$/.test(w));
 }
 
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const NO_REPLY_RE = /^(no[-_.]?reply|donotreply|mailer-daemon|postmaster)@/i;
+
+export interface ApplicationContact {
+  email: string;
+  /** La frase del anuncio donde aparece el email (trae el asunto y las instrucciones). */
+  notes: string;
+}
+
+/**
+ * Extrae el email de aplicación de una oferta, si el anuncio lo trae.
+ * Muchas convocatorias (ONGs, instituciones) se aplican por correo: el
+ * anuncio indica «enviar CV a …». Se descartan buzones no-reply. Las
+ * notas son la frase completa donde aparece, truncada a 300 caracteres.
+ */
+export function extractApplicationContact(
+  title: string | null | undefined,
+  highlights: readonly string[] | null | undefined,
+): ApplicationContact | null {
+  const sources = [title ?? '', ...(highlights ?? [])];
+  for (const src of sources) {
+    if (!src) continue;
+    const matches = src.match(EMAIL_RE) ?? [];
+    for (const m of matches) {
+      const email = m.toLowerCase();
+      if (NO_REPLY_RE.test(email)) continue;
+      const notes = src.replace(/\s+/g, ' ').trim();
+      return { email, notes: notes.length > 300 ? notes.slice(0, 300) : notes };
+    }
+  }
+  return null;
+}
+
 /** Ventana de actualidad: solo páginas publicadas en los últimos N días. */
 export const RECENCY_WINDOW_DAYS = 30;
 

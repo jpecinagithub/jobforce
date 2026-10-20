@@ -150,7 +150,12 @@ export default async function CampaignDetailPage({
                       </>
                     )}
                   </td>
-                  <td>{o.company || '—'}</td>
+                  <td>
+                    {o.company || '—'}
+                    {o.application_email ? (
+                      <span title={`Se aplica por email: ${o.application_email}`}> 📧</span>
+                    ) : null}
+                  </td>
                   <td>
                     {o.evaluation ? (
                       <span className={verdictBadgeClass(o.evaluation.mandatory_verdict)}>

@@ -37,6 +37,7 @@ import {
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
   generateQueries,
   looksLikePersonProfile,
+  extractApplicationContact,
   type ExaClient,
 } from '@jobforce/search';
 import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
@@ -249,6 +250,8 @@ interface OfferRow {
   raw: unknown;
   url_ok: boolean | null;
   url_checked_at: Date | null;
+  application_email?: string | null;
+  application_notes?: string | null;
   mandatory_verdict: string | null;
   score: string | null;
   breakdown: unknown;
@@ -451,11 +454,14 @@ export async function ejecutarBusquedaCampana(
             continue;
           }
           const canon = canonicalUrl(result.url);
+          // Canal de aplicación por email: si el anuncio trae el correo al
+          // que enviar la candidatura, se guarda con su frase (instrucciones).
+          const contact = extractApplicationContact(result.title, result.highlights);
           const rows = await query<{ id: string; title: string | null; url: string; highlights: unknown }>(
             `INSERT INTO offers
                (campaign_id, search_id, canonical_url, url, title, company,
-                published_date, highlights, raw)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::jsonb, $9::jsonb)
+                published_date, highlights, raw, application_email, application_notes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::jsonb, $9::jsonb, $10, $11)
              ON CONFLICT (campaign_id, canonical_url) DO NOTHING
              RETURNING id, title, url, highlights`,
             [
@@ -468,6 +474,8 @@ export async function ejecutarBusquedaCampana(
               result.publishedDate ?? null,
               JSON.stringify(result.highlights ?? []),
               JSON.stringify(result),
+              contact?.email ?? null,
+              contact?.notes ?? null,
             ],
           );
           if (rows.length > 0) {
@@ -772,7 +780,7 @@ export async function registerCampaignRoutes(
     const rows = await query<OfferRow>(
       `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
               o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
-              o.url_ok, o.url_checked_at,
+              o.url_ok, o.url_checked_at, o.application_email, o.application_notes,
               e.mandatory_verdict, e.score, e.breakdown,
               a.id AS application_id, a.status AS application_status
          FROM offers o
@@ -822,6 +830,7 @@ export async function registerCampaignRoutes(
         company: o.company,
         url: o.url,
         url_ok: o.url_ok,
+        application_email: o.application_email ?? null,
         application: o.application_id
           ? {
               id: o.application_id,
