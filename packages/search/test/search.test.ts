@@ -164,7 +164,7 @@ describe('createExaClient', () => {
     assert.equal(seenBody.query, 'CFO finance job');
     assert.equal(seenBody.type, 'auto');
     assert.equal(seenBody.numResults, 5);
-    assert.deepEqual(seenBody.excludeDomains, ['linkedin.com', 'exa.ai']);
+    assert.deepEqual(seenBody.excludeDomains, ['linkedin.com', 'exa.ai', 'rocketreach.co', 'zoominfo.com', 'signalhire.com', 'theorg.com', 'apollo.io', 'lusha.com']);
     assert.deepEqual(seenBody.contents, { highlights: true });
     // Actualidad: startPublishedDate dentro de la ventana de 30 días.
     const desde = new Date(String(seenBody.startPublishedDate)).getTime();

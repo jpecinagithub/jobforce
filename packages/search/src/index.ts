@@ -21,7 +21,16 @@ export interface ExaSearchOptions {
  * Dominios excluidos por defecto en búsquedas de empleo: no publican
  * ofertas como tales (perfiles personales, agregadores muertos, etc.).
  */
-export const DEFAULT_EXCLUDED_DOMAINS = ['linkedin.com', 'exa.ai'];
+export const DEFAULT_EXCLUDED_DOMAINS = [
+  'linkedin.com',
+  'exa.ai',
+  'rocketreach.co',
+  'zoominfo.com',
+  'signalhire.com',
+  'theorg.com',
+  'apollo.io',
+  'lusha.com',
+];
 
 export interface ExaResult {
   id: string;
