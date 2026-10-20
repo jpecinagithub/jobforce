@@ -1,5 +1,6 @@
 import { apiGet } from '@/lib/api';
 import AnswerForm from '@/components/AnswerForm';
+import AnswersClient from '@/components/AnswersClient';
 import type { AnswerMemory } from '@jobforce/domain';
 
 export const dynamic = 'force-dynamic';
@@ -23,29 +24,7 @@ export default async function RespuestasPage() {
       ) : answers.data.length === 0 ? (
         <div className="notice">Todavía no hay respuestas guardadas.</div>
       ) : (
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Pregunta</th>
-              <th>Respuesta</th>
-              <th>Fuente</th>
-              <th>Ámbito</th>
-            </tr>
-          </thead>
-          <tbody>
-            {answers.data.map((a, i) => (
-              <tr key={a.id ?? `${a.questionNormalized}-${i}`}>
-                <td>{a.questionOriginal}</td>
-                <td>{a.answer}</td>
-                <td className="muted">{a.source}</td>
-                <td>
-                  <span className="badge">{a.scopeType}</span>
-                  {a.scopeValue ? <span className="muted"> · {a.scopeValue}</span> : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <AnswersClient answers={answers.data} />
       )}
 
       <AnswerForm />

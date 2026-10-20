@@ -229,6 +229,9 @@ export interface CreateAnswerRequest {
   reuseRule?: ReuseRule;
 }
 
+/** Actualización parcial de una respuesta guardada (PATCH /api/answers/:id). */
+export type UpdateAnswerRequest = Partial<CreateAnswerRequest>;
+
 // ---------------------------------------------------------------------------
 // Fase 2 — Campañas de búsqueda y evaluación
 // ---------------------------------------------------------------------------

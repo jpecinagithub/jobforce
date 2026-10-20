@@ -106,6 +106,142 @@ describe('respuestas y configuración', () => {
     assert.equal(rows.length, 1);
   });
 
+  it('PATCH /api/answers/:id actualiza la respuesta y audita', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/answers',
+      headers: authed(auth),
+      payload: {
+        questionOriginal: '¿Pregunta?',
+        questionNormalized: 'pregunta',
+        answer: 'Respuesta vieja.',
+        source: 'manual',
+      },
+    });
+    assert.equal(created.statusCode, 201);
+    const id = created.json().id as string;
+
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: `/api/answers/${id}`,
+      headers: authed(auth),
+      payload: { answer: 'Respuesta nueva.', language: 'en' },
+    });
+    assert.equal(updated.statusCode, 200);
+    assert.deepEqual(updated.json(), { ok: true });
+
+    const lista = await app.inject({
+      method: 'GET',
+      url: '/api/answers',
+      headers: authed(auth, false),
+    });
+    const [row] = lista.json<Array<{ answer: string; language: string; questionOriginal: string }>>();
+    assert.equal(row.answer, 'Respuesta nueva.');
+    assert.equal(row.language, 'en');
+    assert.equal(row.questionOriginal, '¿Pregunta?');
+
+    const audit = await query<{ action: string }>(
+      `SELECT action FROM audit_events WHERE action = 'answer_updated'`,
+    );
+    assert.equal(audit.length, 1);
+  });
+
+  it('PATCH /api/answers/:id exige CSRF y valida id y cuerpo', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/answers',
+      headers: authed(auth),
+      payload: {
+        questionOriginal: '¿Pregunta?',
+        questionNormalized: 'pregunta',
+        answer: 'Respuesta.',
+        source: 'manual',
+      },
+    });
+    const id = created.json().id as string;
+
+    const sinCsrf = await app.inject({
+      method: 'PATCH',
+      url: `/api/answers/${id}`,
+      headers: authed(auth, false),
+      payload: { answer: 'x' },
+    });
+    assert.equal(sinCsrf.statusCode, 403);
+
+    const vacio = await app.inject({
+      method: 'PATCH',
+      url: `/api/answers/${id}`,
+      headers: authed(auth),
+      payload: {},
+    });
+    assert.equal(vacio.statusCode, 400);
+
+    const noUuid = await app.inject({
+      method: 'PATCH',
+      url: '/api/answers/no-es-uuid',
+      headers: authed(auth),
+      payload: { answer: 'x' },
+    });
+    assert.equal(noUuid.statusCode, 400);
+
+    const inexistente = await app.inject({
+      method: 'PATCH',
+      url: '/api/answers/00000000-0000-4000-8000-000000000000',
+      headers: authed(auth),
+      payload: { answer: 'x' },
+    });
+    assert.equal(inexistente.statusCode, 404);
+  });
+
+  it('DELETE /api/answers/:id elimina la respuesta y audita', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/answers',
+      headers: authed(auth),
+      payload: {
+        questionOriginal: '¿Pregunta?',
+        questionNormalized: 'pregunta',
+        answer: 'Respuesta.',
+        source: 'manual',
+      },
+    });
+    const id = created.json().id as string;
+
+    const sinCsrf = await app.inject({
+      method: 'DELETE',
+      url: `/api/answers/${id}`,
+      headers: authed(auth, false),
+    });
+    assert.equal(sinCsrf.statusCode, 403);
+
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/api/answers/${id}`,
+      headers: authed(auth),
+    });
+    assert.equal(removed.statusCode, 200);
+    assert.deepEqual(removed.json(), { ok: true });
+
+    const lista = await app.inject({
+      method: 'GET',
+      url: '/api/answers',
+      headers: authed(auth, false),
+    });
+    assert.deepEqual(lista.json(), []);
+
+    const otra = await app.inject({
+      method: 'DELETE',
+      url: `/api/answers/${id}`,
+      headers: authed(auth),
+    });
+    assert.equal(otra.statusCode, 404);
+
+    const audit = await query<{ action: string }>(
+      `SELECT action FROM audit_events WHERE action = 'answer_deleted'`,
+    );
+    assert.equal(audit.length, 1);
+  });
+
   it('GET /api/config sin configuración → 404', async () => {
     const res = await app.inject({
       method: 'GET',
