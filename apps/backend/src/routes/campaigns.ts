@@ -305,173 +305,46 @@ function checkCampaignId(id: unknown): id is string {
 // Rutas.
 // ---------------------------------------------------------------------------
 
-export async function registerCampaignRoutes(
-  app: FastifyInstance,
+// ---------------------------------------------------------------------------
+// Ejecución de una búsqueda de campaña. La comparten el botón «Buscar» del
+// panel (POST /api/campaigns/:id/search) y el scheduler diario (Fase 8.2):
+// MISMA lógica de presupuesto, circuit breaker, evaluación, validación de
+// enlaces, libro de costes y preparación automática.
+// ---------------------------------------------------------------------------
+
+export interface BusquedaResumen {
+  id: string;
+  query: string;
+  results_count: number;
+  duplicates_count: number;
+  cost_usd: number;
+  error?: string;
+}
+
+export type ResultadoBusqueda =
+  | { ok: true; searches: BusquedaResumen[]; total_cost_usd: number }
+  | { ok: false; status: number; error: string; extra?: Record<string, unknown> };
+
+export async function ejecutarBusquedaCampana(
   config: AppConfig,
-): Promise<void> {
-  // GET /api/campaigns — lista con contadores de búsquedas y ofertas.
-  app.get('/api/campaigns', authOnly, async () => {
-    const rows = await query<CampaignRow>(
-      `SELECT c.id, c.name, c.criteria, c.role_profile_id, c.exa_budget_cap_usd, c.exa_spent_usd,
-              c.total_budget_cap_usd, c.status, c.created_at, c.updated_at,
-              (SELECT COUNT(*) FROM searches s WHERE s.campaign_id = c.id) AS searches_count,
-              (SELECT COUNT(*) FROM offers o WHERE o.campaign_id = c.id) AS offers_count
-         FROM campaigns c ORDER BY c.created_at DESC`,
-    );
-    return { campaigns: rows.map(mapCampaign) };
-  });
-
-  // POST /api/campaigns — crea una campaña (criterios por defecto si no se dan).
-  app.post('/api/campaigns', mutating, async (req, reply) => {
-    const valid = validateBody(CreateCampaignBody, req.body, reply);
-    if (!valid) return;
-    const criteria = valid.data.criteria ?? defaultCriteria();
-    // Perfil por rol: explícito (con existencia comprobada), null explícito
-    // (sin énfasis) u omitido (se asigna el perfil «por defecto» si existe).
-    let roleProfileId: string | null;
-    if (valid.data.role_profile_id === undefined) {
-      roleProfileId = await defaultRoleProfileId();
-    } else if (valid.data.role_profile_id === null) {
-      roleProfileId = null;
-    } else {
-      if (!(await roleProfileExists(valid.data.role_profile_id))) {
-        return reply.code(400).send({ error: 'perfil_rol_no_encontrado' });
-      }
-      roleProfileId = valid.data.role_profile_id;
-    }
-    const rows = await query<{ id: string; name: string; exa_budget_cap_usd: string }>(
-      `INSERT INTO campaigns (name, criteria, exa_budget_cap_usd, role_profile_id, created_by)
-       VALUES ($1, $2::jsonb, COALESCE($3::numeric, 3.0000), $4, $5)
-       RETURNING id, name, exa_budget_cap_usd`,
-      [
-        valid.data.name,
-        JSON.stringify(criteria),
-        valid.data.exa_budget_cap_usd ?? null,
-        roleProfileId,
-        req.authSession?.userId ?? null,
-      ],
-    );
-    const created = rows[0];
-    await auditEvent({
-      actorId: req.authSession?.userId ?? null,
-      action: 'campaign_created',
-      entityType: 'campaign',
-      entityId: created.id,
-      details: {
-        name: created.name,
-        exa_budget_cap_usd: Number(created.exa_budget_cap_usd),
-        role_profile_id: roleProfileId,
-      },
-    });
-    return reply.code(201).send({ id: created.id, name: created.name, role_profile_id: roleProfileId });
-  });
-
-  // GET /api/campaigns/:id — detalle.
-  app.get('/api/campaigns/:id', authOnly, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!checkCampaignId(id)) {
-      return reply.code(400).send({ error: 'campana_invalida' });
-    }
-    const campaign = await getCampaignOr404(id);
-    if (!campaign) {
-      return reply.code(404).send({ error: 'campana_no_encontrada' });
-    }
-    return { campaign: mapCampaign(campaign) };
-  });
-
-  // PUT /api/campaigns/:id — actualización parcial.
-  app.put('/api/campaigns/:id', mutating, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!checkCampaignId(id)) {
-      return reply.code(400).send({ error: 'campana_invalida' });
-    }
-    const valid = validateBody(UpdateCampaignBody, req.body ?? {}, reply);
-    if (!valid) return;
-
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    const changed: string[] = [];
-    if (valid.data.name !== undefined) {
-      params.push(valid.data.name);
-      sets.push(`name = $${params.length}`);
-      changed.push('name');
-    }
-    if (valid.data.criteria !== undefined) {
-      params.push(JSON.stringify(valid.data.criteria));
-      sets.push(`criteria = $${params.length}::jsonb`);
-      changed.push('criteria');
-    }
-    if (valid.data.role_profile_id !== undefined) {
-      if (
-        valid.data.role_profile_id !== null &&
-        !(await roleProfileExists(valid.data.role_profile_id))
-      ) {
-        return reply.code(400).send({ error: 'perfil_rol_no_encontrado' });
-      }
-      params.push(valid.data.role_profile_id);
-      sets.push(`role_profile_id = $${params.length}`);
-      changed.push('role_profile_id');
-    }
-    if (valid.data.exa_budget_cap_usd !== undefined) {
-      params.push(valid.data.exa_budget_cap_usd);
-      sets.push(`exa_budget_cap_usd = $${params.length}`);
-      changed.push('exa_budget_cap_usd');
-    }
-    if (valid.data.total_budget_cap_usd !== undefined) {
-      params.push(valid.data.total_budget_cap_usd);
-      sets.push(`total_budget_cap_usd = $${params.length}`);
-      changed.push('total_budget_cap_usd');
-    }
-    if (valid.data.status !== undefined) {
-      params.push(valid.data.status);
-      sets.push(`status = $${params.length}`);
-      changed.push('status');
-    }
-    if (sets.length === 0) {
-      return reply.code(400).send({ error: 'datos_invalidos', detalles: ['cuerpo: sin cambios'] });
-    }
-    sets.push('updated_at = now()');
-    params.push(id);
-    const updated = await query<{ id: string }>(
-      `UPDATE campaigns SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id`,
-      params,
-    );
-    if (updated.length === 0) {
-      return reply.code(404).send({ error: 'campana_no_encontrada' });
-    }
-    await auditEvent({
-      actorId: req.authSession?.userId ?? null,
-      action: 'campaign_updated',
-      entityType: 'campaign',
-      entityId: id,
-      details: { cambios: changed },
-    });
-    return reply.send({ ok: true });
-  });
-
-  // POST /api/campaigns/:id/search — lanza búsquedas en Exa con control de presupuesto.
-  app.post('/api/campaigns/:id/search', mutating, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!checkCampaignId(id)) {
-      return reply.code(400).send({ error: 'campana_invalida' });
-    }
-    const valid = validateBody(LaunchSearchBody, req.body ?? {}, reply);
-    if (!valid) return;
-
+  campaignId: string,
+  opts: { queries?: string[]; numResults?: number; actorId: string | null },
+): Promise<ResultadoBusqueda> {
+    const id = campaignId;
     const campaignRow = await getCampaignOr404(id);
     if (!campaignRow) {
-      return reply.code(404).send({ error: 'campana_no_encontrada' });
+      return { ok: false, status: 404, error: 'campana_no_encontrada' };
     }
     const criteria = campaignRow.criteria as CampaignCriteria;
 
     // 2) Consultas: las del cuerpo o las generadas desde los criterios (máx 5).
-    const bodyQueries = (valid.data.queries ?? []).slice(0, 5);
+    const bodyQueries = (opts.queries ?? []).slice(0, 5);
     const resolvedQueries =
       bodyQueries.length > 0 ? bodyQueries : generateQueries(criteria).slice(0, 5);
     if (resolvedQueries.length === 0) {
-      return reply.code(400).send({ error: 'sin_consultas' });
+      return { ok: false, status: 400, error: 'sin_consultas' };
     }
-    const numResults = valid.data.num_results;
+    const numResults = opts.numResults ?? 5;
 
     // 3) Presupuesto: estimación conservadora ANTES de tocar Exa (tope de
     //    campaña heredado de Fase 2) + presupuestos globales diario/mensual
@@ -480,27 +353,23 @@ export async function registerCampaignRoutes(
     const cap = Number(campaignRow.exa_budget_cap_usd);
     const estimate = resolvedQueries.length * EXA_COST_ESTIMATE_PER_SEARCH_USD;
     if (spent + estimate > cap) {
-      return reply
-        .code(409)
-        .send({ error: 'presupuesto_exa_agotado', gastado: spent, limite: cap });
+      return { ok: false, status: 409, error: 'presupuesto_exa_agotado', extra: { gastado: spent, limite: cap } };
     }
     const disp = await presupuestoDisponible(id);
     if (!disp.ok) {
-      return reply.code(409).send({ error: disp.codigo, motivo: disp.motivo });
+      return { ok: false, status: 409, error: disp.codigo, extra: { motivo: disp.motivo } };
     }
 
     // 3b) Circuit breaker de Exa: si está abierto, no se llama.
     const exaDisp = await conectorDisponible('exa');
     if (!exaDisp.disponible) {
-      return reply
-        .code(503)
-        .send({ error: 'conector_deshabilitado_temporalmente', motivo: exaDisp.motivo });
+      return { ok: false, status: 503, error: 'conector_deshabilitado_temporalmente', extra: { motivo: exaDisp.motivo } };
     }
 
     // 4) Clave de Exa configurada. El valor nunca se loguea.
     const apiKey = config.exaApiKey;
     if (!apiKey) {
-      return reply.code(503).send({ error: 'exa_no_configurado' });
+      return { ok: false, status: 503, error: 'exa_no_configurado' };
     }
 
     const client = exaClientFactory()(apiKey);
@@ -659,20 +528,184 @@ export async function registerCampaignRoutes(
     // un fallo aquí nunca tumba la búsqueda.
     let preparadas = 0;
     try {
-      const sweep = await prepararElegibles(id, req.authSession?.userId ?? null);
+      const sweep = await prepararElegibles(id, opts.actorId);
       preparadas = sweep.preparadas;
     } catch {
       // La preparación se reintenta con el disparo manual o la re-evaluación.
     }
 
     await auditEvent({
-      actorId: req.authSession?.userId ?? null,
+      actorId: opts.actorId,
       action: 'search_launched',
       entityType: 'campaign',
       entityId: id,
       details: { queries: resolvedQueries, total_cost_usd: totalCost, candidaturas_preparadas: preparadas },
     });
-    return reply.send({ searches: summaries, total_cost_usd: totalCost });
+    return { ok: true, searches: summaries, total_cost_usd: totalCost };
+}
+
+export async function registerCampaignRoutes(
+  app: FastifyInstance,
+  config: AppConfig,
+): Promise<void> {
+  // GET /api/campaigns — lista con contadores de búsquedas y ofertas.
+  app.get('/api/campaigns', authOnly, async () => {
+    const rows = await query<CampaignRow>(
+      `SELECT c.id, c.name, c.criteria, c.role_profile_id, c.exa_budget_cap_usd, c.exa_spent_usd,
+              c.total_budget_cap_usd, c.status, c.created_at, c.updated_at,
+              (SELECT COUNT(*) FROM searches s WHERE s.campaign_id = c.id) AS searches_count,
+              (SELECT COUNT(*) FROM offers o WHERE o.campaign_id = c.id) AS offers_count
+         FROM campaigns c ORDER BY c.created_at DESC`,
+    );
+    return { campaigns: rows.map(mapCampaign) };
+  });
+
+  // POST /api/campaigns — crea una campaña (criterios por defecto si no se dan).
+  app.post('/api/campaigns', mutating, async (req, reply) => {
+    const valid = validateBody(CreateCampaignBody, req.body, reply);
+    if (!valid) return;
+    const criteria = valid.data.criteria ?? defaultCriteria();
+    // Perfil por rol: explícito (con existencia comprobada), null explícito
+    // (sin énfasis) u omitido (se asigna el perfil «por defecto» si existe).
+    let roleProfileId: string | null;
+    if (valid.data.role_profile_id === undefined) {
+      roleProfileId = await defaultRoleProfileId();
+    } else if (valid.data.role_profile_id === null) {
+      roleProfileId = null;
+    } else {
+      if (!(await roleProfileExists(valid.data.role_profile_id))) {
+        return reply.code(400).send({ error: 'perfil_rol_no_encontrado' });
+      }
+      roleProfileId = valid.data.role_profile_id;
+    }
+    const rows = await query<{ id: string; name: string; exa_budget_cap_usd: string }>(
+      `INSERT INTO campaigns (name, criteria, exa_budget_cap_usd, role_profile_id, created_by)
+       VALUES ($1, $2::jsonb, COALESCE($3::numeric, 3.0000), $4, $5)
+       RETURNING id, name, exa_budget_cap_usd`,
+      [
+        valid.data.name,
+        JSON.stringify(criteria),
+        valid.data.exa_budget_cap_usd ?? null,
+        roleProfileId,
+        req.authSession?.userId ?? null,
+      ],
+    );
+    const created = rows[0];
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'campaign_created',
+      entityType: 'campaign',
+      entityId: created.id,
+      details: {
+        name: created.name,
+        exa_budget_cap_usd: Number(created.exa_budget_cap_usd),
+        role_profile_id: roleProfileId,
+      },
+    });
+    return reply.code(201).send({ id: created.id, name: created.name, role_profile_id: roleProfileId });
+  });
+
+  // GET /api/campaigns/:id — detalle.
+  app.get('/api/campaigns/:id', authOnly, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const campaign = await getCampaignOr404(id);
+    if (!campaign) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    return { campaign: mapCampaign(campaign) };
+  });
+
+  // PUT /api/campaigns/:id — actualización parcial.
+  app.put('/api/campaigns/:id', mutating, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const valid = validateBody(UpdateCampaignBody, req.body ?? {}, reply);
+    if (!valid) return;
+
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    const changed: string[] = [];
+    if (valid.data.name !== undefined) {
+      params.push(valid.data.name);
+      sets.push(`name = $${params.length}`);
+      changed.push('name');
+    }
+    if (valid.data.criteria !== undefined) {
+      params.push(JSON.stringify(valid.data.criteria));
+      sets.push(`criteria = $${params.length}::jsonb`);
+      changed.push('criteria');
+    }
+    if (valid.data.role_profile_id !== undefined) {
+      if (
+        valid.data.role_profile_id !== null &&
+        !(await roleProfileExists(valid.data.role_profile_id))
+      ) {
+        return reply.code(400).send({ error: 'perfil_rol_no_encontrado' });
+      }
+      params.push(valid.data.role_profile_id);
+      sets.push(`role_profile_id = $${params.length}`);
+      changed.push('role_profile_id');
+    }
+    if (valid.data.exa_budget_cap_usd !== undefined) {
+      params.push(valid.data.exa_budget_cap_usd);
+      sets.push(`exa_budget_cap_usd = $${params.length}`);
+      changed.push('exa_budget_cap_usd');
+    }
+    if (valid.data.total_budget_cap_usd !== undefined) {
+      params.push(valid.data.total_budget_cap_usd);
+      sets.push(`total_budget_cap_usd = $${params.length}`);
+      changed.push('total_budget_cap_usd');
+    }
+    if (valid.data.status !== undefined) {
+      params.push(valid.data.status);
+      sets.push(`status = $${params.length}`);
+      changed.push('status');
+    }
+    if (sets.length === 0) {
+      return reply.code(400).send({ error: 'datos_invalidos', detalles: ['cuerpo: sin cambios'] });
+    }
+    sets.push('updated_at = now()');
+    params.push(id);
+    const updated = await query<{ id: string }>(
+      `UPDATE campaigns SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING id`,
+      params,
+    );
+    if (updated.length === 0) {
+      return reply.code(404).send({ error: 'campana_no_encontrada' });
+    }
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'campaign_updated',
+      entityType: 'campaign',
+      entityId: id,
+      details: { cambios: changed },
+    });
+    return reply.send({ ok: true });
+  });
+
+  // POST /api/campaigns/:id/search — lanza búsquedas en Exa (la lógica vive
+  // en ejecutarBusquedaCampana, compartida con el scheduler diario).
+  app.post('/api/campaigns/:id/search', mutating, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!checkCampaignId(id)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const valid = validateBody(LaunchSearchBody, req.body ?? {}, reply);
+    if (!valid) return;
+    const res = await ejecutarBusquedaCampana(config, id, {
+      queries: valid.data.queries,
+      numResults: valid.data.num_results,
+      actorId: req.authSession?.userId ?? null,
+    });
+    if (!res.ok) {
+      return reply.code(res.status).send({ error: res.error, ...(res.extra ?? {}) });
+    }
+    return reply.send({ searches: res.searches, total_cost_usd: res.total_cost_usd });
   });
 
   // GET /api/campaigns/:id/offers — ofertas con su evaluación (si existe).

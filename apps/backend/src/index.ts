@@ -11,6 +11,11 @@ import { closePool, runMigrations } from '@jobforce/database';
 import { fijarPresupuesto } from '@jobforce/costs';
 import { buildServer } from './server.js';
 import { iniciarWorkerSends, type WorkerHandle } from './sender/index.js';
+import {
+  iniciarSchedulerBusquedas,
+  proximaEjecucionMadrid,
+  type SchedulerHandle,
+} from './scheduler.js';
 import { workspaceBase } from './workspace.js';
 
 async function main(): Promise<void> {
@@ -46,9 +51,22 @@ async function main(): Promise<void> {
     app.log.info('worker de envíos iniciado (SENDER_WORKER_ENABLED=true)');
   }
 
+  // Scheduler de búsquedas diarias (Fase 8.2): a las 08:00 (Europe/Madrid)
+  // busca solo en las campañas activas que no hayan buscado en 20 h.
+  const scheduler: SchedulerHandle = iniciarSchedulerBusquedas(config, {
+    onError: (err) => app.log.error({ err }, 'scheduler de búsquedas: error en el barrido'),
+    onRun: (r) =>
+      app.log.info({ barrido: r }, 'scheduler de búsquedas: barrido diario completado'),
+  });
+  app.log.info(
+    { proxima: proximaEjecucionMadrid().toISOString() },
+    'scheduler de búsquedas iniciado (diario 08:00 Europe/Madrid)',
+  );
+
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'apagando servidor');
     worker?.detener();
+    scheduler.detener();
     await app.close();
     await closePool();
     process.exit(0);
