@@ -292,10 +292,19 @@ export default function CriteriaEditor({ campaign }: Props) {
       params: m.params,
     })),
   );
-  const [weights, setWeights] = useState<Record<PreferenceKey, string>>(() =>
+  const [prefs, setPrefs] = useState<
+    Record<PreferenceKey, { weight: string; description: string; keywords: string[] }>
+  >(() =>
     Object.fromEntries(
-      PREFERENCE_ORDER.map((k) => [k, String(campaign.criteria.preferences[k].weight)]),
-    ) as Record<PreferenceKey, string>,
+      PREFERENCE_ORDER.map((k) => [
+        k,
+        {
+          weight: String(campaign.criteria.preferences[k].weight),
+          description: campaign.criteria.preferences[k].description,
+          keywords: [...campaign.criteria.preferences[k].keywords],
+        },
+      ]),
+    ) as Record<PreferenceKey, { weight: string; description: string; keywords: string[] }>,
   );
   const [queriesText, setQueriesText] = useState(campaign.criteria.queries.join('\n'));
   const [error, setError] = useState<string | null>(null);
@@ -305,11 +314,15 @@ export default function CriteriaEditor({ campaign }: Props) {
   const weightsSum = useMemo(
     () =>
       PREFERENCE_ORDER.reduce((acc, k) => {
-        const w = parseInt(weights[k], 10);
+        const w = parseInt(prefs[k].weight, 10);
         return acc + (Number.isInteger(w) ? w : 0);
       }, 0),
-    [weights],
+    [prefs],
   );
+
+  function updatePref(k: PreferenceKey, patch: Partial<{ weight: string; description: string; keywords: string[] }>) {
+    setPrefs((p) => ({ ...p, [k]: { ...p[k], ...patch } }));
+  }
 
   function updateRow(i: number, patch: Partial<MandatoryRow>) {
     setMandatory((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -398,15 +411,23 @@ export default function CriteriaEditor({ campaign }: Props) {
       mandatoryReqs.push({ id, kind: row.kind, description: row.description.trim(), params: row.params });
     }
 
-    // Validación de pesos 0..100.
-    const prefWeights = {} as Record<PreferenceKey, number>;
+    // Validación de preferencias: peso 0..100 y descripción no vacía.
+    const prefDims = {} as CampaignCriteria['preferences'];
     for (const k of PREFERENCE_ORDER) {
-      const w = parseInt(weights[k], 10);
+      const w = parseInt(prefs[k].weight, 10);
       if (!Number.isInteger(w) || w < 0 || w > 100) {
         fail(`El peso de «${PREFERENCE_LABELS[k]}» debe ser un entero entre 0 y 100.`);
         return;
       }
-      prefWeights[k] = w;
+      if (!prefs[k].description.trim()) {
+        fail(`La descripción de «${PREFERENCE_LABELS[k]}» es obligatoria.`);
+        return;
+      }
+      prefDims[k] = {
+        weight: w,
+        description: prefs[k].description.trim(),
+        keywords: prefs[k].keywords,
+      };
     }
 
     const queries = queriesText.split('\n').map((q) => q.trim()).filter(Boolean);
@@ -418,14 +439,14 @@ export default function CriteriaEditor({ campaign }: Props) {
     const criteria: CampaignCriteria = {
       roles,
       mandatory: mandatoryReqs,
-      preferences: Object.fromEntries(
-        PREFERENCE_ORDER.map((k) => [
-          k,
-          { ...campaign.criteria.preferences[k], weight: prefWeights[k] },
-        ]),
-      ) as CampaignCriteria['preferences'],
+      preferences: prefDims,
       queries,
       unknown_policy: 'conservative',
+      // Los dominios de búsqueda no se editan en este formulario: se
+      // conservan tal cual (sin esto, guardar borraría el filtro).
+      ...(campaign.criteria.include_domains
+        ? { include_domains: campaign.criteria.include_domains }
+        : {}),
     };
 
     setLoading(true);
@@ -554,46 +575,54 @@ export default function CriteriaEditor({ campaign }: Props) {
         Añadir requisito
       </button>
 
-      <h3>Pesos de preferencias (0..100)</h3>
-      <table className="data">
-        <thead>
-          <tr>
-            <th>Dimensión</th>
-            <th>Peso</th>
-            <th>Descripción</th>
-          </tr>
-        </thead>
-        <tbody>
-          {PREFERENCE_ORDER.map((k) => (
-            <tr key={k}>
-              <td><strong>{PREFERENCE_LABELS[k]}</strong></td>
-              <td>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={weights[k]}
-                  onChange={(e) => setWeights((w) => ({ ...w, [k]: e.target.value }))}
-                  style={{ width: '5rem' }}
-                  aria-label={`Peso de ${PREFERENCE_LABELS[k]}`}
-                />
-              </td>
-              <td className="muted">
-                {campaign.criteria.preferences[k].description}
-                <br />
-                <small>claves: {campaign.criteria.preferences[k].keywords.join(', ')}</small>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td><strong>Suma</strong></td>
-            <td><strong>{weightsSum}</strong></td>
-            <td className="muted"><small>la puntuación se normaliza por la suma de pesos</small></td>
-          </tr>
-        </tfoot>
-      </table>
+      <h3>Preferencias puntuables</h3>
+      <p className="muted" style={{ marginTop: '-0.5rem' }}>
+        Cada dimensión suma hasta su peso cuando el anuncio contiene sus palabras clave.
+        La nota final se normaliza por la suma de pesos (ahora <strong>{weightsSum}</strong>).
+        Edita la descripción y las claves a tu gusto — antes solo se veían.
+      </p>
+      {PREFERENCE_ORDER.map((k) => (
+        <fieldset
+          key={k}
+          style={{
+            border: '1px solid var(--border, #333)',
+            borderRadius: '8px',
+            padding: '0.75rem 1rem 0.5rem',
+            marginBottom: '0.75rem',
+          }}
+        >
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'end' }}>
+            <strong style={{ marginBottom: '0.5rem', minWidth: '7rem' }}>{PREFERENCE_LABELS[k]}</strong>
+            <div className="field" style={{ marginBottom: '0.5rem' }}>
+              <label>Peso (0..100)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={prefs[k].weight}
+                onChange={(e) => updatePref(k, { weight: e.target.value })}
+                style={{ width: '5rem' }}
+                aria-label={`Peso de ${PREFERENCE_LABELS[k]}`}
+              />
+            </div>
+            <div className="field" style={{ flex: '1 1 260px', marginBottom: '0.5rem' }}>
+              <label>Descripción</label>
+              <input
+                value={prefs[k].description}
+                onChange={(e) => updatePref(k, { description: e.target.value })}
+                aria-label={`Descripción de ${PREFERENCE_LABELS[k]}`}
+              />
+            </div>
+          </div>
+          <ChipsEditor
+            label="Palabras clave que suman en esta dimensión"
+            values={prefs[k].keywords}
+            onChange={(v) => updatePref(k, { keywords: v })}
+            placeholder="contabilidad"
+            hint="Si el anuncio contiene alguna, la dimensión puntúa en proporción a cuántas aparecen."
+          />
+        </fieldset>
+      ))}
 
       <div className="field">
         <label htmlFor="ce-queries">Consultas base (una por línea, máx 10: cada día se usan 5 en rotación; si se deja vacío se generan desde los roles)</label>
