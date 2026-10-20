@@ -23,6 +23,7 @@ import type { FastifyInstance } from 'fastify';
 import type { DecisionEnvio, PoliticaAutonomia } from '@jobforce/domain';
 import { evaluarEnvio, type ContextoEnvio } from '@jobforce/autonomy';
 import { query, withTransaction } from '@jobforce/database';
+import { checkUrlAlive } from '@jobforce/search';
 import { auditEvent } from '../audit.js';
 import { requireCsrf, requireSession } from '../auth.js';
 import { getEffectivePolicy } from './autonomy.js';
@@ -381,6 +382,142 @@ function mapSend(row: SendRow) {
 }
 
 // ---------------------------------------------------------------------------
+// Solicitud de envío (Fase 7): lógica de request-send extraída de la ruta
+// para reutilizarla en el encadenado aprobación → envío de /revision.
+// ---------------------------------------------------------------------------
+
+/**
+ * Sonda de vigencia por HTTP (producción): la URL de la oferta debe
+ * responder. Es una comprobación REAL, no simulada: si el portal bloquea
+ * la sonda o la oferta caducó, el check falla y el envío no se encola.
+ * El ejecutor re-verifica después con la sonda del navegador (driver).
+ */
+const sondaVigenciaHttp = async (ctx: OfferProbeContext): Promise<OfferProbeResult> => {
+  if (!ctx.offerUrl) {
+    return { ok: false, detalle: 'sin_url_de_oferta: no se puede re-verificar la vigencia' };
+  }
+  const viva = await checkUrlAlive(ctx.offerUrl);
+  return viva
+    ? { ok: true, detalle: 'sonda http: la URL de la oferta responde' }
+    : { ok: false, detalle: 'sonda http: la URL de la oferta no responde (posible caducidad)' };
+};
+
+export type SolicitarEnvioResultado =
+  | { outcome: 'no_encontrada' }
+  | { outcome: 'repetido'; send: ReturnType<typeof mapSend> & { duplicado: boolean } }
+  | { outcome: 'ya_existe'; sendId: string }
+  | { outcome: 'conflicto' }
+  | {
+      outcome: 'bloqueado';
+      decision: DecisionEnvio;
+      motivos: string[];
+      checks: CheckResultado[];
+    }
+  | { outcome: 'encolado'; send: ReturnType<typeof mapSend> & { duplicado: boolean } };
+
+/**
+ * Decide y, si la política lo permite, encola el envío de una candidatura
+ * (send `queued` + lock de 15 min, transaccional). Idempotente por clave y
+ * sin duplicados por candidatura. La sonda de vigencia es la inyectada en
+ * tests si la hay; en producción, la sonda HTTP real.
+ */
+export async function solicitarEnvio(
+  applicationId: string,
+  opts: { actorId?: string | null; idempotencyKey?: string } = {},
+): Promise<SolicitarEnvioResultado> {
+  const application = await loadApplication(applicationId);
+  if (!application) return { outcome: 'no_encontrada' };
+  const id = applicationId;
+  const idempotencyKey = opts.idempotencyKey;
+
+  // 1) Idempotencia estricta: la misma clave devuelve el mismo envío.
+  if (idempotencyKey) {
+    const previas = await query<SendRow>(
+      `SELECT id, application_id, idempotency_key, policy_version, status,
+              evidence, created_at
+         FROM sends WHERE idempotency_key = $1`,
+      [idempotencyKey],
+    );
+    if (previas.length > 0) {
+      return { outcome: 'repetido', send: { ...mapSend(previas[0]), duplicado: true } };
+    }
+  }
+
+  // 2) Sin duplicados por candidatura (aunque la clave sea distinta).
+  const existentes = await query<{ id: string }>(
+    `SELECT id FROM sends WHERE application_id = $1 AND status <> 'failed'`,
+    [id],
+  );
+  if (existentes.length > 0) {
+    return { outcome: 'ya_existe', sendId: existentes[0].id };
+  }
+
+  // 3) Checks + decisión de política.
+  const policy = await getEffectivePolicy();
+  const probe = testDeps.offerProbe ?? sondaVigenciaHttp;
+  const { checks, metricas } = await runPresendChecks(application, probe);
+  if (!policy) {
+    return {
+      outcome: 'bloqueado',
+      decision: 'bloqueado',
+      motivos: ['sin_politica_vigente'],
+      checks,
+    };
+  }
+  const { decision, motivos } = decidirEnvio(application, policy.policy, checks, metricas);
+  if (decision !== 'permitido') {
+    return { outcome: 'bloqueado', decision, motivos, checks };
+  }
+
+  // 4) Permitido: encola el envío + lock con vencimiento (transaccional).
+  const key = idempotencyKey ?? randomUUID();
+  const evidence = {
+    decision: 'permitido' as DecisionEnvio,
+    motivos,
+    checks,
+    policy_version: policy.version,
+    decided_at: new Date().toISOString(),
+    cost_usd: 0,
+  };
+  try {
+    const created = await withTransaction(async (client) => {
+      const sendRows = await client.query<SendRow>(
+        `INSERT INTO sends (application_id, idempotency_key, policy_version, status, evidence)
+         VALUES ($1, $2, $3, 'queued', $4::jsonb)
+         RETURNING id, application_id, idempotency_key, policy_version,
+                   status, evidence, created_at`,
+        [id, key, policy.version, JSON.stringify(evidence)],
+      );
+      await client.query(
+        `INSERT INTO send_locks (application_id, locked_until, locked_by)
+         VALUES ($1, now() + interval '15 minutes', 'request-send')`,
+        [id],
+      );
+      return sendRows.rows[0] as SendRow;
+    });
+    await auditEvent({
+      actorId: opts.actorId ?? null,
+      action: 'send_queued',
+      entityType: 'send',
+      entityId: created.id,
+      details: { application_id: id, policy_version: policy.version, idempotency_key: key },
+    });
+    return { outcome: 'encolado', send: { ...mapSend(created), duplicado: false } };
+  } catch (err) {
+    // Carrera: otro proceso encoló o bloqueó entre el check y el INSERT.
+    if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
+      const deNuevo = await query<{ id: string }>(
+        `SELECT id FROM sends WHERE application_id = $1 AND status <> 'failed'`,
+        [id],
+      );
+      if (deNuevo.length > 0) return { outcome: 'ya_existe', sendId: deNuevo[0].id };
+      return { outcome: 'conflicto' };
+    }
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Rutas.
 // ---------------------------------------------------------------------------
 
@@ -405,94 +542,30 @@ export async function registerSendRoutes(app: FastifyInstance): Promise<void> {
     if (!UUID_RE.test(id)) {
       return reply.code(400).send({ error: 'candidatura_invalida' });
     }
-    const application = await loadApplication(id);
-    if (!application) {
-      return reply.code(404).send({ error: 'candidatura_no_encontrada' });
-    }
-
     const rawKey = req.headers['x-idempotency-key'];
     const idempotencyKey = Array.isArray(rawKey) ? rawKey[0] : rawKey;
-
-    // 1) Idempotencia estricta: la misma clave devuelve el mismo envío.
-    if (idempotencyKey) {
-      const previas = await query<SendRow>(
-        `SELECT id, application_id, idempotency_key, policy_version, status,
-                evidence, created_at
-           FROM sends WHERE idempotency_key = $1`,
-        [idempotencyKey],
-      );
-      if (previas.length > 0) {
-        return reply.send({ ...mapSend(previas[0]), duplicado: true });
-      }
-    }
-
-    // 2) Sin duplicados por candidatura (aunque la clave sea distinta).
-    const existentes = await query<{ id: string }>(
-      `SELECT id FROM sends WHERE application_id = $1 AND status <> 'failed'`,
-      [id],
-    );
-    if (existentes.length > 0) {
-      return reply
-        .code(409)
-        .send({ error: 'envio_ya_existe', send_id: existentes[0].id });
-    }
-
-    // 3) Checks + decisión de política.
-    const policy = await getEffectivePolicy();
-    const { checks, metricas } = await runPresendChecks(application);
-    if (!policy) {
-      return reply.send({
-        application_id: id,
-        decision: 'bloqueado' satisfies DecisionEnvio,
-        motivos: ['sin_politica_vigente'],
-        checks,
-      });
-    }
-    const { decision, motivos } = decidirEnvio(application, policy.policy, checks, metricas);
-    if (decision !== 'permitido') {
-      return reply.send({ application_id: id, decision, motivos, checks });
-    }
-
-    // 4) Permitido: encola el envío + lock con vencimiento (transaccional).
-    const key = idempotencyKey ?? randomUUID();
-    const evidence = {
-      decision: 'permitido' as DecisionEnvio,
-      motivos,
-      checks,
-      policy_version: policy.version,
-      decided_at: new Date().toISOString(),
-      cost_usd: 0,
-    };
-    try {
-      const created = await withTransaction(async (client) => {
-        const sendRows = await client.query<SendRow>(
-          `INSERT INTO sends (application_id, idempotency_key, policy_version, status, evidence)
-           VALUES ($1, $2, $3, 'queued', $4::jsonb)
-           RETURNING id, application_id, idempotency_key, policy_version,
-                     status, evidence, created_at`,
-          [id, key, policy.version, JSON.stringify(evidence)],
-        );
-        await client.query(
-          `INSERT INTO send_locks (application_id, locked_until, locked_by)
-           VALUES ($1, now() + interval '15 minutes', 'request-send')`,
-          [id],
-        );
-        return sendRows.rows[0] as SendRow;
-      });
-      await auditEvent({
-        actorId: req.authSession?.userId ?? null,
-        action: 'send_queued',
-        entityType: 'send',
-        entityId: created.id,
-        details: { application_id: id, policy_version: policy.version, idempotency_key: key },
-      });
-      return reply.code(201).send({ ...mapSend(created), duplicado: false });
-    } catch (err) {
-      // Carrera: otro proceso encoló o bloqueó entre el check y el INSERT.
-      if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
+    const res = await solicitarEnvio(id, {
+      actorId: req.authSession?.userId ?? null,
+      idempotencyKey,
+    });
+    switch (res.outcome) {
+      case 'no_encontrada':
+        return reply.code(404).send({ error: 'candidatura_no_encontrada' });
+      case 'repetido':
+        return reply.send(res.send);
+      case 'ya_existe':
+        return reply.code(409).send({ error: 'envio_ya_existe', send_id: res.sendId });
+      case 'conflicto':
         return reply.code(409).send({ error: 'envio_ya_existe' });
-      }
-      throw err;
+      case 'bloqueado':
+        return reply.send({
+          application_id: id,
+          decision: res.decision,
+          motivos: res.motivos,
+          checks: res.checks,
+        });
+      case 'encolado':
+        return reply.code(201).send(res.send);
     }
   });
 }

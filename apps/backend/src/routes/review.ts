@@ -9,8 +9,13 @@
  * La cola solo lista; la lectura exige sesión, las mutaciones exigen sesión +
  * cabecera CSRF. Solo se puede aprobar/rechazar desde `ready_for_review`
  * (el estado que produce el modo `preparar_para_revision`); cualquier otro
- * estado responde 409. Los envíos reales siguen pasando por el sender worker:
- * estas rutas solo cambian el estado de revisión.
+ * estado responde 409.
+ *
+ * Fase 7: en modo `preparar_para_revision`, aprobar ENCADENA la solicitud
+ * de envío (la misma lógica de request-send): si la política lo permite se
+ * encola y el worker lo ejecuta; si lo bloquea, la aprobación queda
+ * registrada, no se encola nada y se abre una intervención con el motivo.
+ * En los demás modos estas rutas solo cambian el estado de revisión.
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -19,6 +24,9 @@ import { query, withTransaction } from '@jobforce/database';
 import { auditEvent } from '../audit.js';
 import { requireCsrf, requireSession } from '../auth.js';
 import { validateBody } from '../validation.js';
+import { crearIntervencionSiNoAbierta } from '../intervention.js';
+import { getEffectivePolicy } from './autonomy.js';
+import { solicitarEnvio } from './sends.js';
 
 const authOnly = { preHandler: [requireSession] };
 const mutating = { preHandler: [requireSession, requireCsrf] };
@@ -262,6 +270,63 @@ function replyReviewError(reply: FastifyReply, err: unknown) {
 }
 
 // ---------------------------------------------------------------------------
+// Encadenado aprobación → envío (Fase 7).
+// ---------------------------------------------------------------------------
+
+export interface SendChainResult {
+  send: 'encolado' | 'bloqueado';
+  motivo?: string;
+}
+
+/**
+ * Tras una aprobación, en modo `preparar_para_revision` se encadena la
+ * solicitud de envío reutilizando `solicitarEnvio` (la lógica de
+ * request-send): re-evalúa la política completa (checks, cuotas,
+ * presupuesto, parada global) y encola si procede.
+ *
+ * - Fuera de ese modo devuelve null: la respuesta no cambia (comportamiento
+ *   histórico intacto).
+ * - Si la política lo bloquea, la aprobación YA registrada se mantiene,
+ *   no se encola nada y se abre una intervención con el motivo.
+ */
+async function encadenarEnvioTrasAprobacion(
+  applicationId: string,
+  actorId: string | null,
+): Promise<SendChainResult | null> {
+  const policy = await getEffectivePolicy();
+  if (!policy || policy.policy.modoActivo !== 'preparar_para_revision') return null;
+  try {
+    const res = await solicitarEnvio(applicationId, { actorId });
+    if (res.outcome === 'encolado' || res.outcome === 'repetido') {
+      return { send: 'encolado' };
+    }
+    if (res.outcome === 'ya_existe') {
+      return { send: 'encolado', motivo: 'ya_existia_un_envio_para_esta_candidatura' };
+    }
+    if (res.outcome === 'no_encontrada') {
+      return { send: 'bloqueado', motivo: 'candidatura_no_encontrada' };
+    }
+    if (res.outcome === 'conflicto') {
+      return { send: 'bloqueado', motivo: 'conflicto_al_encolar_el_envio' };
+    }
+    const motivo = res.motivos.join(' | ') || res.decision;
+    await crearIntervencionSiNoAbierta('fuera_de_politica', applicationId, {
+      origen: 'aprobacion_revision',
+      decision: res.decision,
+      motivos: res.motivos,
+    });
+    return { send: 'bloqueado', motivo };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'error desconocido';
+    await crearIntervencionSiNoAbierta('error_tecnico', applicationId, {
+      origen: 'aprobacion_revision',
+      error: msg.slice(0, 500),
+    }).catch(() => undefined);
+    return { send: 'bloqueado', motivo: `error_tecnico: ${msg}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Rutas.
 // ---------------------------------------------------------------------------
 
@@ -286,11 +351,18 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
   });
 
   // POST /api/applications/:id/approve — Jon aprueba: ready_for_review → approved.
+  // En modo preparar_para_revision encadena la solicitud de envío y la
+  // respuesta lo indica: { send: 'encolado' | 'bloqueado', motivo? }.
   app.post('/api/applications/:id/approve', mutating, async (req, reply) => {
     const { id } = req.params as { id: string };
     try {
       const row = await applyDecision(id, 'approve', undefined, req);
-      return reply.send({ ok: true, application: mapApplication(row) });
+      const chain = await encadenarEnvioTrasAprobacion(id, req.authSession?.userId ?? null);
+      return reply.send({
+        ok: true,
+        application: mapApplication(row),
+        ...(chain ? { send: chain } : {}),
+      });
     } catch (err) {
       return replyReviewError(reply, err);
     }
@@ -315,11 +387,25 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     const valid = validateBody(BatchBody, req.body ?? {}, reply);
     if (!valid) return;
     const { ids, action, reason } = valid.data;
-    const items: Array<{ id: string; ok: boolean; error?: string; status?: string }> = [];
+    const items: Array<{
+      id: string;
+      ok: boolean;
+      error?: string;
+      status?: string;
+      send?: SendChainResult;
+    }> = [];
     for (const id of ids) {
       try {
         await applyDecision(id, action, reason, req);
-        items.push({ id, ok: true });
+        if (action === 'approve') {
+          const chain = await encadenarEnvioTrasAprobacion(
+            id,
+            req.authSession?.userId ?? null,
+          );
+          items.push(chain ? { id, ok: true, send: chain } : { id, ok: true });
+        } else {
+          items.push({ id, ok: true });
+        }
       } catch (err) {
         if (err instanceof ReviewError) {
           items.push(err.status !== undefined ? { id, ok: false, error: err.code, status: err.status } : { id, ok: false, error: err.code });

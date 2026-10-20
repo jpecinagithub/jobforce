@@ -112,12 +112,14 @@ const VISIBLE_CAPTCHA_JS = `[...document.querySelectorAll("iframe")]
 // Forwarder TCP local (AGENTS.md): inyecta Proxy-Authorization del entorno.
 // ---------------------------------------------------------------------------
 
-function startForwarder(): Promise<net.Server> {
+function startForwarder(): Promise<net.Server | null> {
   return new Promise((resolve, reject) => {
     const upstream =
       process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY;
     if (!upstream) {
-      reject(new AnomaliaEnvio('error_ambiguo', 'sin variable de proxy en el entorno'));
+      // Sin proxy en el entorno (p. ej. el contenedor de Oracle, con egreso
+      // directo): no hay forwarder y Chromium navega sin proxy.
+      resolve(null);
       return;
     }
     const u = new URL(upstream);
@@ -168,6 +170,10 @@ function startForwarder(): Promise<net.Server> {
 }
 
 function resolveChromiumExe(): string {
+  // En el contenedor se fija el Chromium del sistema por variable de
+  // entorno (mismo criterio que @jobforce/docs).
+  const deEntorno = process.env.PLAYWRIGHT_CHROMIUM_EXE;
+  if (deEntorno && existsSync(deEntorno)) return deEntorno;
   const base = join(homedir(), '.cache', 'ms-playwright');
   if (!existsSync(base)) {
     throw new AnomaliaEnvio('error_ambiguo', `Chromium no encontrado en ${base}`);
@@ -225,7 +231,7 @@ export class PersonioDriver implements BrowserDriver {
     this.browser = await chromium.launch({
       executablePath: resolveChromiumExe(),
       headless: true,
-      proxy: { server: 'http://127.0.0.1:18080' },
+      ...(this.forwarder ? { proxy: { server: 'http://127.0.0.1:18080' } } : {}),
       args: ['--ignore-certificate-errors', '--no-sandbox', '--disable-dev-shm-usage'],
     });
     this.page = await this.browser.newPage({ viewport: { width: 1360, height: 1000 } });

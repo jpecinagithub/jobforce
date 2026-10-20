@@ -1,5 +1,5 @@
 /**
- * @jobforce/backend — Ejecutor de envíos (modo `ejecutar_automatico`).
+ * @jobforce/backend — Ejecutor de envíos.
  *
  * Procesa las filas de `sends` en estado `queued`:
  *
@@ -8,9 +8,11 @@
  *   2. Carga la candidatura, la oferta y los documentos versionados; verifica
  *      que los PDF existen en disco y que su SHA-256 coincide con la
  *      biblioteca `documents` (integridad de lo enviado).
- *   3. Puerta de política (LÍMITE DURO): modo `ejecutar_automatico` +
- *      autorización escrita vigente + sin parada global. Si no, no se abre
- *      el navegador: `failed` + intervención `fuera_de_politica`.
+ *   3. Puerta de política (LÍMITE DURO): autorización escrita vigente + sin
+ *      parada global + una de dos vías: modo `ejecutar_automatico`, o modo
+ *      `preparar_para_revision` con la candidatura en `approved` (la
+ *      aprobación expresa de Jon por candidatura, Fase 7). Si no, no se
+ *      abre el navegador: `failed` + intervención `fuera_de_politica`.
  *   4. Re-ejecuta `runPresendChecks` (con sonda real de vigencia vía el
  *      driver) y `decidirEnvio` justo antes del envío. Si la decisión no es
  *      `permitido` → `failed` + intervención `fuera_de_politica`.
@@ -412,12 +414,19 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
     const { app, job } = trabajo;
 
     // 4) Puerta de política — LÍMITE DURO. Sin esto no se abre el navegador.
+    //    Vías legítimas: (a) `ejecutar_automatico` con autorización escrita;
+    //    (b) `preparar_para_revision` con la candidatura en `approved`: en
+    //    este modo la aprobación expresa de Jon por candidatura ES la
+    //    autorización operativa (Fase 7). Todo lo demás falla cerrado.
     const policyRow = await getEffectivePolicy();
     const polit = policyRow?.policy ?? null;
+    const viaAutomatica = polit?.modoActivo === 'ejecutar_automatico';
+    const viaRevisionAprobada =
+      polit?.modoActivo === 'preparar_para_revision' && app.status === 'approved';
     if (
       !policyRow ||
       !polit ||
-      polit.modoActivo !== 'ejecutar_automatico' ||
+      !(viaAutomatica || viaRevisionAprobada) ||
       !isAuthorized(policyRow) ||
       policyRow.global_stop ||
       polit.paradaGlobal
@@ -425,14 +434,20 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
       const razones: string[] = [];
       if (!policyRow || !polit) razones.push('sin política efectiva');
       else {
-        if (polit.modoActivo !== 'ejecutar_automatico') razones.push(`modo=${polit.modoActivo}`);
+        if (!(viaAutomatica || viaRevisionAprobada)) {
+          razones.push(
+            polit.modoActivo === 'preparar_para_revision'
+              ? `modo=preparar_para_revision sin aprobación expresa de Jon (estado=${app.status})`
+              : `modo=${polit.modoActivo}`,
+          );
+        }
         if (!isAuthorized(policyRow)) razones.push('sin autorización escrita vigente');
         if (policyRow.global_stop || polit.paradaGlobal) razones.push('parada global activa');
       }
       return await fallar(
         send,
         app.id,
-        `la política no autoriza el modo automático (${razones.join(', ')})`,
+        `la política no autoriza el envío (${razones.join(', ')})`,
         'fuera_de_politica',
         { modo: polit?.modoActivo ?? null },
         actorId,

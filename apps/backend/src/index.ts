@@ -11,6 +11,7 @@ import { closePool, runMigrations } from '@jobforce/database';
 import { fijarPresupuesto } from '@jobforce/costs';
 import { buildServer } from './server.js';
 import { iniciarWorkerSends, type WorkerHandle } from './sender/index.js';
+import { workspaceBase } from './workspace.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -35,6 +36,10 @@ async function main(): Promise<void> {
   let worker: WorkerHandle | null = null;
   if (config.senderWorkerEnabled) {
     worker = iniciarWorkerSends({
+      // La base de documentos debe coincidir con la de quien los genera
+      // (prepare.ts usa la misma función): en el contenedor es
+      // /home/app/workspace, con el volumen de documentos montado.
+      deps: { workspaceBase: workspaceBase() },
       onError: (err) => app.log.error({ err }, 'worker de envíos: error en iteración'),
       onResultado: (r) => app.log.info({ resultado: r }, 'worker de envíos: envío procesado'),
     });
