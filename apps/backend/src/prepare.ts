@@ -37,6 +37,10 @@ import {
 } from '@jobforce/docs';
 import type { ProfileFactInput } from '@jobforce/eval';
 import { auditEvent } from './audit.js';
+import {
+  intentarConfigurarFormulario,
+  type InspectorFormulario,
+} from './formconfig.js';
 import { getEffectivePolicy } from './routes/autonomy.js';
 import { workspaceBase } from './workspace.js';
 
@@ -375,6 +379,8 @@ export interface GenerarDocumentosDeps {
   render?: (html: string, pdfPath: string, pngPath: string) => Promise<void>;
   /** Base del workspace. Por defecto, `workspaceBase()`. */
   base?: string;
+  /** Inspector de formularios (Fase 8.1). Solo para tests. */
+  formConfigInspector?: InspectorFormulario;
 }
 
 async function generarDocumentosPdf(
@@ -587,6 +593,18 @@ export async function prepararCandidatura(
       entityId: applicationId,
       details: { campaign_id: campaignId, offer_id: offerId, creada },
     });
+    // Fase 8.1: intento de configuración automática del formulario del
+    // portal (solo Personio). Aislado: su resultado queda en el snapshot
+    // (`formConfig` o `formConfigPendiente`) y NUNCA tumba la preparación.
+    try {
+      await intentarConfigurarFormulario(applicationId, {
+        ...(opts.deps?.formConfigInspector
+          ? { inspector: opts.deps.formConfigInspector }
+          : {}),
+      });
+    } catch {
+      // intentarConfigurarFormulario ya no lanza por diseño; doble red.
+    }
     return { applicationId, status: 'ready_for_review', creada };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'error desconocido';
@@ -614,6 +632,7 @@ export async function prepararCandidatura(
  * Disparo automático: prepara las ofertas de la campaña con veredicto
  * `cumple` y score >= umbralEncajeRevision de la política ACTIVA.
  * Nunca lanza: cada preparación va aislada (un fallo no tumba la búsqueda).
+ *
  */
 export async function prepararElegibles(
   campaignId: string,

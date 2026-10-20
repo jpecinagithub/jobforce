@@ -73,7 +73,7 @@ interface PwChromium {
   launch(opts: Record<string, unknown>): Promise<PwBrowser>;
 }
 
-function cargarPlaywright(): PwChromium {
+export function cargarPlaywright(): PwChromium {
   // createRequire con __filename (CJS): resuelve 'playwright-core' desde
   // node_modules del backend tras `pnpm install` (o NODE_PATH en pruebas).
   const req = createRequire(__filename);
@@ -112,7 +112,7 @@ const VISIBLE_CAPTCHA_JS = `[...document.querySelectorAll("iframe")]
 // Forwarder TCP local (AGENTS.md): inyecta Proxy-Authorization del entorno.
 // ---------------------------------------------------------------------------
 
-function startForwarder(): Promise<net.Server | null> {
+export function startForwarder(): Promise<net.Server | null> {
   return new Promise((resolve, reject) => {
     const upstream =
       process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY;
@@ -169,7 +169,7 @@ function startForwarder(): Promise<net.Server | null> {
   });
 }
 
-function resolveChromiumExe(): string {
+export function resolveChromiumExe(): string {
   // En el contenedor se fija el Chromium del sistema por variable de
   // entorno (mismo criterio que @jobforce/docs).
   const deEntorno = process.env.PLAYWRIGHT_CHROMIUM_EXE;
