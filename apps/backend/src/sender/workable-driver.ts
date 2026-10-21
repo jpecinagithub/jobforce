@@ -387,7 +387,7 @@ export class WorkableDriver implements BrowserDriver {
     }
     if (!uploadsOk) {
       throw new AnomaliaEnvio(
-        'formato_invalido',
+        'formulario_cambiado',
         'no se pudo subir el CV al formulario de Workable (input de fichero no operable)',
       );
     }
