@@ -23,6 +23,9 @@ jobs:
   ci:
     name: typecheck + tests + build
     runs-on: ubuntu-latest
+    # Red de seguridad: si algo se cuelga, el job falla a los 30 min en vez
+    # de agotar el límite de 6 h de GitHub (pasó 24 veces, 2026-10-19/20).
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -31,11 +34,17 @@ jobs:
           POSTGRES_USER: jobforce
           POSTGRES_PASSWORD: jobforce
           POSTGRES_DB: jobforce_test
-        # Sin "ports" fijo: GitHub asigna un puerto aleatorio del host
-        # (el 5432 fijo chocaba en el runner -> exit 125 al crear el contenedor).
+        # OBLIGATORIO declarar `ports:`: sin esta clave el contenedor se crea
+        # SIN publicar ningún puerto y los pasos del job (que corren en el
+        # host, no en un contenedor) no pueden conectar -> todos los tests
+        # de backend caían con ECONNREFUSED. Con `- 5432` GitHub publica el
+        # 5432 del contenedor en un puerto ALEATORIO del host (publicar un
+        # puerto fijo sería `- "5432:5432"`, que es lo que chocaba).
         # El puerto real se inyecta en DATABASE_URL con job.services.postgres.ports.
+        ports:
+          - 5432
         options: >-
-          --health-cmd "pg_isready -U jobforce"
+          --health-cmd "pg_isready -U jobforce -d jobforce_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -57,6 +66,14 @@ jobs:
 
       - name: Typecheck (build + tsc --noEmit en todos los paquetes)
         run: corepack pnpm typecheck
+
+      # Los tests de backend de la Fase 7 generan PDF reales: necesitan el
+      # Chromium de Playwright (resuelto desde ~/.cache/ms-playwright por
+      # packages/docs/src/browser.ts) y poppler (pdfinfo/pdftotext).
+      - name: Chromium de Playwright + poppler (tests con PDF reales)
+        run: |
+          corepack pnpm --filter @jobforce/backend exec playwright-core install chromium
+          sudo apt-get update && sudo apt-get install -y poppler-utils
 
       - name: Tests
         env:

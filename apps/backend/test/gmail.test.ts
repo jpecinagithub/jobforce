@@ -132,8 +132,14 @@ describe('rutas de Gmail', () => {
   });
 
   after(async () => {
-    await closeTestApp(app);
-    await fakeGoogle.close();
+    try {
+      if (app) await closeTestApp(app);
+    } finally {
+      // El Google falso debe cerrarse SIEMPRE, aunque buildTestApp haya
+      // fallado y `app` no exista: si queda escuchando, el proceso de
+      // tests no termina nunca (era el cuelgue de 6 h de la CI).
+      if (fakeGoogle) await fakeGoogle.close();
+    }
   });
 
   beforeEach(async () => {

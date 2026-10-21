@@ -136,8 +136,10 @@ export async function resetDb(): Promise<void> {
   );
 }
 
-export async function closeTestApp(app: FastifyInstance): Promise<void> {
-  await app.close();
+export async function closeTestApp(app?: FastifyInstance): Promise<void> {
+  // Tolerante a `app` sin crear (p. ej. buildTestApp falló en el `before`):
+  // los `after` deben poder limpiar el resto de recursos sin reventar.
+  if (app) await app.close();
   await closePool();
 }
 
