@@ -25,7 +25,15 @@ for (const r of rows) {
     await query('UPDATE offers SET company = $2 WHERE id = $1', [r.id, computed]);
     updated++;
     console.log(`EMPRESA ${r.title} :: ${r.company ?? '(null)'} -> ${computed}`);
-  } else if (!computed && r.company && /publicada|published|posted/i.test(r.company)) {
+  } else if (
+    !computed &&
+    r.company &&
+    (/publicada|published|posted/i.test(r.company) ||
+      // La primera versión del backfill asignó como «empresa» el primer
+      // segmento en títulos «Puesto - Portal»: si la empresa guardada ES
+      // ese segmento inicial del título, era el puesto, no la empresa.
+      (r.title ?? '').startsWith(r.company))
+  ) {
     await query('UPDATE offers SET company = NULL WHERE id = $1', [r.id]);
     cleaned++;
     console.log(`LIMPIEZA ${r.title} :: ${r.company} -> (null)`);

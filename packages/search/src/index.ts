@@ -440,9 +440,9 @@ const PORTAL_NAMES = new Set([
   'devex', 'unjobs', 'infojobs', 'jobera', 'tealhq', 'greenhouse', 'lever', 'ashby',
 ]);
 
-/** Palabras de rol: si un segmento del título las contiene, es el puesto, no la empresa. */
+/** Palabras de rol (EN+ES): si un segmento del título las contiene, es el puesto, no la empresa. */
 const JOB_SEGMENT_RE =
-  /(manager|director|analyst|specialist|controller|lead|head|coordinator|officer|accountant|finance|financial|consultant|engineer|developer|assistant|executive|administrator|partner|supervisor|clerk|auditor|planner|strategist|designer|recruiter|intern|chef|nurse|teacher|manager)/i;
+  /(manager|director|analyst|specialist|controller|lead|head|coordinator|officer|accountant|finance|financial|consultant|engineer|developer|assistant|executive|administrator|partner|supervisor|clerk|auditor|planner|strategist|designer|recruiter|intern|chef|nurse|teacher|tecnico|tecnica|contabilidad|responsable|administrativ|coordinador|gerente|jefe|encargado|auxiliar|consultor|analista|gestor|operario|dependiente|comercial|ingeniero|abogado|enfermer|medico|profesor|desarrollador|programador|expatriado|proyectos)/i;
 
 /** Si el candidato (sin espacios ni signos) es un tenant conocido, su nombre visible. */
 function polishCompany(candidate: string): string {

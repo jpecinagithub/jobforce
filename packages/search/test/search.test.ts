@@ -713,6 +713,23 @@ describe('extractCompany', () => {
     );
   });
 
+  it('título «Puesto - Portal» en español NO es empresa (caso La Coordinadora)', () => {
+    assert.equal(
+      extractCompany({
+        title: 'Técnico/a de contabilidad - La Coordinadora de Organizaciones para el Desarrollo',
+        url: 'https://www.coordinadoraongd.org/empleo/tecnico-contabilidad',
+      }),
+      null,
+    );
+    assert.equal(
+      extractCompany({
+        title: 'TÉCNICO/A PROYECTOS EN MALI - Red ONGD de Madrid',
+        url: 'https://www.coordinadoraongd.org/empleo/tecnico-mali',
+      }),
+      null,
+    );
+  });
+
   it('sin señal → null (ReliefWeb no es la empresa)', () => {
     assert.equal(
       extractCompany({
