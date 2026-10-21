@@ -541,10 +541,11 @@ export async function ejecutarBusquedaCampana(
           // IPs de datacenter (caso real Jobera, 2026-10-21: 404 desde
           // Oracle, 200 desde una conexión normal). Se degrada a
           // «unknown»: se conserva, sin etiqueta. La guarda NO se aplica
-          // si el veredicto viene de la API del portal (Workday CXS):
-          // ese 404 lo firma el propio ATS, no un cortafuegos.
+          // si el veredicto viene del propio portal (API CXS de Workday
+          // o plantilla de cierre de Breezy): esa evidencia la firma el
+          // ATS, no un cortafuegos.
           const checks = rawChecks.map((c) => {
-            if (c.status !== 'broken' || c.via === 'workday_api') return c;
+            if (c.status !== 'broken' || c.via !== 'http') return c;
             const offer = newOffers.find((o) => o.id === c.id);
             return offer?.exaText && offer.exaText.trim().length > 0
               ? { ...c, status: 'unknown' as UrlStatus }

@@ -538,3 +538,49 @@ describe('Workday (API CXS)', () => {
     assert.equal(await checkUrlStatus(GSK), 'unknown');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Breezy HR: posición cerrada = HTTP 200 con plantilla «Position Closed»
+// ---------------------------------------------------------------------------
+
+describe('Breezy HR (cierre por contenido)', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const BREEZY = 'https://immersive-technologies.breezy.hr/p/20be2cb6f85a-finance-manager-latam';
+
+  const stubHtml = (html: string, status = 200) => {
+    globalThis.fetch = (async () => new Response(html, { status })) as typeof fetch;
+  };
+
+  it('200 con la plantilla de cierre → broken', async () => {
+    stubHtml(
+      '<div class="application-confirmed"><h1>Position Closed</h1><p>Sorry, this position is no longer accepting candidates.</p></div>',
+    );
+    assert.deepEqual(await checkUrlStatusDetailed(BREEZY), {
+      status: 'broken',
+      via: 'breezy_content',
+    });
+    assert.equal(await checkUrlAlive(BREEZY), false);
+  });
+
+  it('200 con la oferta abierta (formulario de candidatura) → alive', async () => {
+    stubHtml('<h1>Finance Manager Latam</h1><p>We are looking for a Finance Manager.</p><button>Apply for this position</button>');
+    assert.equal(await checkUrlStatus(BREEZY), 'alive');
+  });
+
+  it('404 → broken', async () => {
+    stubHtml('not found', 404);
+    assert.equal(await checkUrlStatus(BREEZY), 'broken');
+  });
+
+  it('error de red → unknown', async () => {
+    globalThis.fetch = (async () => {
+      throw new Error('boom');
+    }) as typeof fetch;
+    assert.equal(await checkUrlStatus(BREEZY), 'unknown');
+  });
+});

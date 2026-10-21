@@ -496,8 +496,8 @@ async function probeUrl(url: string, method: 'HEAD' | 'GET'): Promise<ProbeOutco
 const isGoneStatus = (status: number): boolean => status === 404 || status === 410;
 const isDnsGone = (err: unknown): boolean => errorCodes(err).has('ENOTFOUND');
 
-/** Vía que produjo el veredicto: la API oficial del portal o la sonda HTTP genérica. */
-export type UrlCheckVia = 'workday_api' | 'http';
+/** Vía que produjo el veredicto: API del portal, contenido de la página o sonda HTTP genérica. */
+export type UrlCheckVia = 'workday_api' | 'breezy_content' | 'http';
 
 export interface UrlCheckDetail {
   status: UrlStatus;
@@ -534,6 +534,81 @@ export function workdayCxsJobUrl(url: string): string | null {
   }
 }
 
+/** Lee el cuerpo de una respuesta con tope de bytes (para inspección de contenido). */
+async function readBodyCapped(res: Response, cap: number): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+      if (total >= cap) break;
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // Sin efecto: ya se leyó lo necesario.
+    }
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
+/**
+ * Breezy HR: una posición cerrada devuelve HTTP 200 con la plantilla
+ * «Position Closed — Sorry, this position is no longer accepting
+ * candidates.» renderizada en el HTML (caso real, 2026-10-21: Finance
+ * Manager Latam de Immersive Technologies, cerrada y «viva» para la
+ * sonda por estado). El veredicto sale del CONTENIDO, no del estado.
+ */
+const BREEZY_CLOSED_MARKERS = [
+  'position is no longer accepting candidates',
+  '<h1>position closed</h1>',
+];
+
+async function checkBreezyStatus(url: string): Promise<UrlCheckDetail> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), URL_CHECK_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: URL_CHECK_HEADERS,
+    });
+    if (isGoneStatus(res.status)) return { status: 'broken', via: 'breezy_content' };
+    if (res.status >= 400) return { status: 'unknown', via: 'breezy_content' };
+    const html = (await readBodyCapped(res, 256_000)).toLowerCase();
+    if (BREEZY_CLOSED_MARKERS.some((m) => html.includes(m))) {
+      return { status: 'broken', via: 'breezy_content' };
+    }
+    return { status: 'alive', via: 'breezy_content' };
+  } catch {
+    return { status: 'unknown', via: 'breezy_content' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** ¿Es una URL de Breezy HR ({empresa}.breezy.hr)? */
+function isBreezyUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname.endsWith('.breezy.hr');
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Sonda de vigencia con veredicto y vía. Para Workday manda su API CXS
  * (la sonda HTML no puede distinguir nada ahí: siempre 200); si la API
@@ -544,6 +619,7 @@ export function workdayCxsJobUrl(url: string): string | null {
  * fallo transitorio queda en `unknown`. Nunca lanza.
  */
 export async function checkUrlStatusDetailed(url: string): Promise<UrlCheckDetail> {
+  if (isBreezyUrl(url)) return checkBreezyStatus(url);
   const cxs = workdayCxsJobUrl(url);
   if (cxs) {
     const api = await probeUrl(cxs, 'GET');
