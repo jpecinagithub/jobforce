@@ -445,7 +445,7 @@ async function processOfferUrl(
   }>(`SELECT application_email, application_notes FROM offers WHERE id = $1`, [offerId]);
   const portal = detectarPortal(url);
 
-  if (portal === 'personio' || portal === 'icims' || portal === 'workable') {
+  if (portal === 'personio' || portal === 'icims' || portal === 'workable' || portal === 'workday') {
     // 5a) Portal con driver: aprobación (la orden del chat) + worker.
     // La orden queda sellada en el snapshot: es la revisión favorable
     // de Jon para ESTA candidatura (decidirEnvio la reconoce).
@@ -479,7 +479,9 @@ async function processOfferUrl(
         ? '🚀 Envío encolado: el trabajador va a entrar en iCIMS (creando tu cuenta si aún no existe), rellenar la candidatura y enviarla…'
         : portal === 'workable'
           ? '🚀 Envío encolado: el trabajador va a rellenar el formulario de Workable y enviar la candidatura…'
-          : '🚀 Envío encolado: el trabajador está rellenando la candidatura en Personio…',
+          : portal === 'workday'
+            ? '🚀 Envío encolado: el trabajador va a entrar en Workday (creando tu cuenta con tus credenciales si aún no existe), rellenar la candidatura paso a paso y enviarla…'
+            : '🚀 Envío encolado: el trabajador está rellenando la candidatura en Personio…',
     );
 
     // Seguimiento del worker hasta el resultado.
