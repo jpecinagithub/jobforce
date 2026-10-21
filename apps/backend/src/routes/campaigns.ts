@@ -491,6 +491,7 @@ export async function ejecutarBusquedaCampana(
           if (
             detectNationalityRestriction({
               title: result.title,
+              url: result.url,
               highlights: result.highlights ?? [],
               fullText: result.text,
             }).restricted

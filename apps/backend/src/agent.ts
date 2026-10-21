@@ -224,6 +224,7 @@ export async function runAgentJob(jobId: string, rawUrl: string, ctx: AgentJobCo
     // podrás aplicar; no se registra ni se generan documentos.
     const nat = detectNationalityRestriction({
       title: result.title,
+      url,
       highlights: result.highlights ?? [],
       fullText: result.text,
     });
