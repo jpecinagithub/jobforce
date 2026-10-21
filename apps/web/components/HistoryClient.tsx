@@ -27,9 +27,57 @@ function docLabel(kind: string, format: string): string {
  * estado y fecha de aplicación, y el CV/carta descargables. Es la vista
  * en la aplicación del registro que Jon pidió el 20-oct-2026.
  */
+type SortKey = 'fecha' | 'empresa' | 'puesto' | 'nota' | 'canal' | 'estado';
+
+/** Valor por el que se ordena una fila según la columna (el visible). */
+function valorOrden(it: HistoryItem, key: SortKey): string | number | null {
+  switch (key) {
+    case 'fecha':
+      return new Date(it.submittedAt ?? it.createdAt).getTime();
+    case 'empresa':
+      return (it.offer.company || 'Empresa desconocida').toLowerCase();
+    case 'puesto':
+      return (it.offer.title || 'Sin título').toLowerCase();
+    case 'nota':
+      return it.score;
+    case 'canal':
+      return channelLabel(it.channel).toLowerCase();
+    case 'estado':
+      return (APPLICATION_STATUS_LABELS[it.status] ?? it.status).toLowerCase();
+  }
+}
+
 export default function HistoryClient() {
   const [items, setItems] = useState<HistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Ordenación por clic en la cabecera (petición de Jon, 21-oct-2026):
+  // defecto = fecha descendente, como devuelve la API.
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'fecha', dir: -1 });
+
+  function alOrdenar(key: SortKey) {
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 1 ? -1 : 1 }
+        : { key, dir: key === 'fecha' || key === 'nota' ? -1 : 1 },
+    );
+  }
+
+  function cabecera(key: SortKey, texto: string) {
+    const activa = sort.key === key;
+    return (
+      <th aria-sort={activa ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}>
+        <button
+          type="button"
+          className="th-sort"
+          onClick={() => alOrdenar(key)}
+          title={`Ordenar por ${texto.toLowerCase()}`}
+        >
+          {texto}
+          {activa ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
+        </button>
+      </th>
+    );
+  }
 
   useEffect(() => {
     let alive = true;
@@ -54,21 +102,34 @@ export default function HistoryClient() {
     return <p className="muted">Todavía no hay candidaturas. Cuando una oferta se prepare, aparecerá aquí.</p>;
   }
 
+  const ordenados = [...items].sort((a, b) => {
+    const va = valorOrden(a, sort.key);
+    const vb = valorOrden(b, sort.key);
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1; // los nulos (nota sin evaluar) siempre al final
+    if (vb === null) return -1;
+    const cmp =
+      typeof va === 'number' && typeof vb === 'number'
+        ? va - vb
+        : String(va).localeCompare(String(vb), 'es');
+    return cmp * sort.dir;
+  });
+
   return (
     <table className="data">
       <thead>
         <tr>
-          <th>Fecha de aplicación</th>
-          <th>Empresa</th>
-          <th>Puesto</th>
-          <th>Nota</th>
-          <th>Canal</th>
-          <th>Estado</th>
+          {cabecera('fecha', 'Fecha de aplicación')}
+          {cabecera('empresa', 'Empresa')}
+          {cabecera('puesto', 'Puesto')}
+          {cabecera('nota', 'Nota')}
+          {cabecera('canal', 'Canal')}
+          {cabecera('estado', 'Estado')}
           <th>CV</th>
         </tr>
       </thead>
       <tbody>
-        {items.map((it) => (
+        {ordenados.map((it) => (
           <tr key={it.id}>
             {/* Fecha de aplicación = envío si lo hubo; si la candidatura
                 aún no se envió (en revisión, aprobada, fallida, retirada),

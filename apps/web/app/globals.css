@@ -322,6 +322,22 @@ table.data td {
 }
 
 table.data tr:hover td { background: rgba(249, 115, 22, 0.05); }
+
+/* Cabeceras ordenables del histórico: botón invisible que hereda el
+   estilo de la cabecera y reacciona al pasar el ratón. */
+table.data th .th-sort {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+table.data th .th-sort:hover { color: var(--accent, #f97316); }
 table.data tr:last-child td { border-bottom: none; }
 
 /* ---- Varios ---- */
