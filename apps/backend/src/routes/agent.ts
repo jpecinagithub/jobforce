@@ -112,7 +112,7 @@ export async function registerAgentRoutes(
       const jobId = inserted[0].id;
       await addAgentMessage(jobId, 'agent', `🤖 Encargo aceptado: voy a aplicar a ${cmd.url}`);
       // En segundo plano: los pasos se publican como mensajes del chat.
-      void runAgentJob(jobId, cmd.url, { exaApiKey: config.exaApiKey, actorId }).catch(
+      void runAgentJob(jobId, cmd.url, { config, actorId }).catch(
         () => undefined,
       );
       return reply.send({ ok: true, accepted: true, jobId });

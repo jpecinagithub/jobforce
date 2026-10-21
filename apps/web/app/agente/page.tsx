@@ -13,11 +13,13 @@ export default function AgentePage() {
       <h1>Agente</h1>
       <div className="notice">
         <strong>Aplicación directa:</strong> pégame el enlace de una oferta («aplica a esta
-        oferta: …») y me encargo de todo: compruebo que sigue viva, la registro, genero el CV
-        y la carta a medida, y envío la candidatura. Hoy el envío totalmente autónomo funciona
-        en <strong>Personio</strong>; en el resto de portales la candidatura queda preparada en
-        Revisión y te aviso con el motivo. Tu orden en el chat cuenta como aprobación expresa
-        de esa candidatura concreta.
+        oferta: …») y me encargo de todo: compruebo que sigue viva y, si el anuncio deriva
+        la aplicación a otro portal, sigo la derivación y trabajo sobre la oferta real.
+        Registro la oferta, genero el CV y la carta a medida y envío la candidatura:
+        en <strong>Personio</strong> de forma automática, y <strong>por correo</strong> cuando
+        el anuncio lo pide y Gmail tiene permiso de envío. Si un portal no me deja aplicar
+        solo, te digo el motivo concreto y te dejo todo preparado en Revisión. Tu orden en
+        el chat cuenta como aprobación expresa de esa candidatura concreta.
       </div>
       <AgentChat />
     </>

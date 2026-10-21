@@ -34,7 +34,11 @@ import {
 } from '../secrets.js';
 import { validateBody } from '../validation.js';
 
-const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+// Lectura (seguimiento) + envío (canal email del agente): el envío solo
+// se activa cuando el ámbito GUARDADO incluye gmail.send, es decir, si
+// Jon reconecta Gmail después de esta ampliación (2026-10-21).
+const GMAIL_SCOPE =
+  'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
 const STATE_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 15_000;
 

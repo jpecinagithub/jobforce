@@ -562,6 +562,84 @@ export function extractCompany(input: {
   return null;
 }
 
+const APPLY_SECTION_RE =
+  /(how to apply|cómo aplicar|como aplicar|comment postuler|application process|para postular|so bewerben sie sich)/i;
+const APPLY_LINK_HINT_RE = /(apply|application|postul|careers|jobs|vacanc|emploi|bewerb)/i;
+const APPLY_IGNORED_HOSTS = [
+  'facebook.com',
+  'twitter.com',
+  'x.com',
+  'instagram.com',
+  'youtube.com',
+  'linkedin.com',
+  'reliefweb.int',
+  'www.reliefweb.int',
+];
+
+/**
+ * Enlace REAL de aplicación dentro del texto de una oferta. Muchas
+ * ofertas (ReliefWeb, portales de ONG) no se aplican en la propia
+ * página: derivan a un portal de la organización («How to apply …
+ * complete your application using the link below: https://…»). Se
+ * busca primero en la sección «How to apply» (y equivalentes); sin
+ * sección, en enlaces cuya URL o texto sugiera aplicación. Se ignoran
+ * redes sociales, el propio portal agregador y la URL de la oferta.
+ * Devuelve null si no hay un enlace claro (nunca se inventa).
+ */
+export function extractApplyUrl(
+  text: string | null | undefined,
+  ownUrl: string,
+): string | null {
+  if (!text) return null;
+  interface Found {
+    url: string;
+    anchor: string;
+    index: number;
+  }
+  const found: Found[] = [];
+  const mdRe = /\[([^\]]{0,120})\]\((https?:\/\/[^\s)]+)\)/g;
+  for (const m of text.matchAll(mdRe)) {
+    found.push({ url: m[2], anchor: m[1] ?? '', index: m.index ?? 0 });
+  }
+  const bareRe = /(?<!\()https?:\/\/[^\s<>"')\]]+/g;
+  for (const m of text.matchAll(bareRe)) {
+    const url = m[0].replace(/[.,;:!?]+$/g, '');
+    if (!found.some((f) => f.url === url)) {
+      found.push({ url, anchor: '', index: m.index ?? 0 });
+    }
+  }
+  let ownHost = '';
+  try {
+    ownHost = new URL(ownUrl).hostname.toLowerCase();
+  } catch {
+    ownHost = '';
+  }
+  const usable = found.filter((f) => {
+    try {
+      const u = new URL(f.url);
+      const host = u.hostname.toLowerCase();
+      if (APPLY_IGNORED_HOSTS.includes(host)) return false;
+      if (f.url === ownUrl) return false;
+      if (host === ownHost && !APPLY_LINK_HINT_RE.test(u.pathname)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (usable.length === 0) return null;
+  const section = text.match(APPLY_SECTION_RE);
+  if (section && section.index !== undefined) {
+    const inSection = usable.filter(
+      (f) => f.index >= section.index! && f.index <= section.index! + 3000,
+    );
+    if (inSection.length > 0) return inSection[0].url;
+  }
+  const hinted = usable.filter(
+    (f) => APPLY_LINK_HINT_RE.test(f.url) || APPLY_LINK_HINT_RE.test(f.anchor),
+  );
+  return hinted[0]?.url ?? null;
+}
+
 export function canonicalUrl(url: string): string {
   try {
     const u = new URL(url);

@@ -15,16 +15,19 @@
  *      Revisión): checks de pre-envío + política + worker.
  *   5. Seguimiento del envío hasta submitted / submission_failed.
  *
- * Paradas honestas: portal sin driver de envío probado (hoy solo
- * Personio aplica solo; el canal email aún no tiene ejecutor — Gmail
- * del backend es de solo lectura) → la candidatura queda preparada en
- * Revisión y el agente lo dice, con el destino y las instrucciones si
- * la oferta se aplica por correo.
+ * Canales: Personio (worker) y email (Gmail, con permiso de envío).
+ * Si el anuncio deriva a otro portal, se sigue la derivación y el
+ * encargo se intenta en el destino. Parada honesta solo cuando el
+ * destino no tiene driver verificado (a menudo exige crear cuenta):
+ * la candidatura queda preparada en Revisión y el agente dice el
+ * motivo concreto, nombrando el portal de destino.
  *
  * Sin LLM: el chat interpreta comandos de forma determinista, igual que
  * el resto del sistema.
  */
 
+import { join, resolve } from 'node:path';
+import type { AppConfig } from '@jobforce/config';
 import { query } from '@jobforce/database';
 import { defaultCriteria, type CampaignCriteria } from '@jobforce/domain';
 import { detectNationalityRestriction, evaluateOffer } from '@jobforce/eval';
@@ -33,11 +36,22 @@ import {
   checkUrlStatusDetailed,
   createExaClient,
   extractApplicationContact,
+  extractApplyUrl,
   extractCompany,
   type ExaResult,
 } from '@jobforce/search';
 import { auditEvent } from './audit.js';
-import { detectarPortal, prepararCandidatura } from './prepare.js';
+import {
+  gmailSendCapable,
+  sendGmailApplication,
+  type GmailApplicationInput,
+} from './gmail-send.js';
+import {
+  construirPerfilCandidato,
+  detectarPortal,
+  prepararCandidatura,
+} from './prepare.js';
+import { workspaceBase } from './workspace.js';
 import { loadActiveProfileFacts } from './routes/campaigns.js';
 import { applyDecision, encadenarEnvioTrasAprobacion } from './routes/review.js';
 
@@ -56,6 +70,9 @@ export interface AgentDeps {
   /** Seguimiento del worker de envíos (tests lo acortan). */
   pollMs?: number;
   pollMax?: number;
+  /** Canal email (tests): capacidad y envío por Gmail. */
+  gmailCanSend?: () => Promise<boolean>;
+  sendEmail?: (input: GmailApplicationInput) => Promise<{ messageId: string }>;
 }
 
 let testDeps: AgentDeps = {};
@@ -98,7 +115,7 @@ export function parseAgentCommand(text: string): AgentCommand {
 }
 
 export const AGENT_HELP =
-  'Puedo aplicar por ti a una oferta concreta. Escríbeme «aplica a esta oferta: <url>» (o pega directamente el enlace) y me encargo de todo: descargo la oferta, compruebo que el enlace sigue vivo, genero el CV y la carta, y envío la candidatura si el portal lo permite (hoy aplica solo Personio; el resto queda preparado en Revisión y te aviso). Con «estado» te digo cómo va el último encargo.';
+  'Puedo aplicar por ti a una oferta concreta. Escríbeme «aplica a esta oferta: <url>» (o pega directamente el enlace) y me encargo de todo: compruebo el enlace, sigo la derivación al portal real si el anuncio aplica en otro sitio, genero el CV y la carta, y envío la candidatura (Personio automáticamente; por correo si el anuncio lo pide y Gmail tiene permiso de envío). Si un portal no me deja aplicar solo, te digo el motivo concreto y te dejo todo preparado. Con «estado» te digo cómo va el último encargo.';
 
 // ---------------------------------------------------------------------------
 // Mensajes y jobs
@@ -179,7 +196,7 @@ async function defaultGetContents(apiKey: string | null, url: string): Promise<E
 }
 
 export interface AgentJobContext {
-  exaApiKey: string | null;
+  config: AppConfig;
   actorId: string | null;
 }
 
@@ -198,173 +215,212 @@ export async function runAgentJob(jobId: string, rawUrl: string, ctx: AgentJobCo
     await setJobState(jobId, { step: 'ingesta' });
     const { id: campaignId, criteria } = await getOrCreateDirectCampaign(ctx.actorId);
 
-    // 1) Sonda de enlace ANTES de gastar en contenidos/documentos.
-    const check = testDeps.checkUrl ?? checkUrlStatusDetailed;
-    const link = await check(url);
-    if (link.status === 'broken') {
-      await say(
-        `⛔ No sigo: el enlace está confirmado como roto (${url}). La oferta ya no existe, así que no genero documentos ni aplico.`,
-      );
-      await setJobState(jobId, { status: 'blocked', step: 'enlace_roto' });
-      return;
+    await processOfferUrl(jobId, url, ctx, campaignId, criteria, 0);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'error desconocido';
+    try {
+      await say(`❌ Algo ha fallado en el proceso: ${msg.slice(0, 300)}`);
+      await setJobState(jobId, { status: 'failed', step: 'error' });
+    } catch {
+      // La BD no responde: nada más que hacer aquí.
     }
+  }
+}
 
-    // 2) Contenidos de la oferta (Exa renderiza la página, JS incluido).
-    const result = testDeps.getContents
-      ? await testDeps.getContents(url)
-      : await defaultGetContents(ctx.exaApiKey, url);
-    if (!result || (!result.title && !result.text)) {
-      await say(
-        '⛔ No he podido leer la oferta (la página no devuelve contenido legible). No aplico a ciegas: revisa el enlace o aplica manualmente.',
-      );
-      await setJobState(jobId, { status: 'blocked', step: 'sin_contenido' });
-      return;
-    }
-    // Elegibilidad dura: restringida a nacionales de otro país = nunca
-    // podrás aplicar; no se registra ni se generan documentos.
-    const nat = detectNationalityRestriction({
-      title: result.title,
-      url,
-      highlights: result.highlights ?? [],
-      fullText: result.text,
-    });
-    if (nat.restricted) {
-      await say(
-        `⛔ Esta oferta está restringida a nacionales del país («${nat.phrase ?? 'restricción de nacionalidad'}»). Nunca podrías aplicar a ella, así que no la registro ni genero documentos.`,
-      );
-      await setJobState(jobId, { status: 'blocked', step: 'restriccion_nacionalidad' });
-      return;
-    }
-    const title = result.title ?? 'Oferta sin título';
-    const company = extractCompany({
-      title: result.title,
-      url,
-      text: result.text,
-      author: result.author,
-    });
+/**
+ * Procesa UNA URL de oferta hasta dejar la candidatura enviada o con
+ * un motivo concreto. Si el anuncio deriva la aplicación a otro portal
+ * («How to apply … link below»), se sigue UNA vez: el encargo se
+ * cumple en el portal de destino, no en el agregador.
+ */
+async function processOfferUrl(
+  jobId: string,
+  url: string,
+  ctx: AgentJobContext,
+  campaignId: string,
+  criteria: CampaignCriteria,
+  depth: number,
+): Promise<void> {
+  const say = async (text: string): Promise<void> => {
+    await addAgentMessage(jobId, 'agent', text);
+  };
 
-    // 3) Alta de la oferta en la campaña interna (dedupe por URL canónica).
-    const canon = canonicalUrl(url);
-    let offerId: string;
-    const existing = await query<{ id: string }>(
-      `SELECT id FROM offers WHERE campaign_id = $1 AND canonical_url = $2`,
-      [campaignId, canon],
+  // 1) Sonda de enlace ANTES de gastar en contenidos/documentos.
+  const check = testDeps.checkUrl ?? checkUrlStatusDetailed;
+  const link = await check(url);
+  if (link.status === 'broken') {
+    await say(
+      `⛔ No sigo: el enlace está confirmado como roto (${url}). La oferta ya no existe, así que no genero documentos ni aplico.`,
     );
-    if (existing.length > 0) {
-      offerId = existing[0].id;
-    } else {
-      const contact = extractApplicationContact(result.title, [
-        ...(result.highlights ?? []),
-        result.text ?? '',
-      ]);
-      const inserted = await query<{ id: string }>(
-        `INSERT INTO offers
-           (campaign_id, search_id, canonical_url, url, title, company,
-            published_date, highlights, raw, application_email, application_notes,
-            url_ok, url_checked_at)
-         VALUES ($1, NULL, $2, $3, $4, $5, $6::date, $7::jsonb, $8::jsonb, $9, $10,
-                 $11, now())
-         RETURNING id`,
-        [
-          campaignId,
-          canon,
-          url,
-          result.title ?? null,
-          company,
-          result.publishedDate ?? null,
-          JSON.stringify(result.highlights ?? []),
-          JSON.stringify(result),
-          contact?.email ?? null,
-          contact?.notes ?? null,
-          link.status === 'alive' ? true : null,
-        ],
-      );
-      offerId = inserted[0].id;
+    await setJobState(jobId, { status: 'blocked', step: 'enlace_roto' });
+    return;
+  }
 
-      // Evaluación informativa con los hechos del perfil activo.
-      const { facts, versionId } = await loadActiveProfileFacts();
-      const ev = evaluateOffer(
-        { title: result.title, url, highlights: result.highlights ?? [], fullText: result.text },
-        criteria,
-        facts,
-      );
-      await query(
-        `INSERT INTO evaluations
-           (offer_id, campaign_id, profile_version_id, mandatory_verdict,
-            mandatory_details, score, breakdown)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
-         ON CONFLICT (offer_id, campaign_id) DO NOTHING`,
-        [
-          offerId,
-          campaignId,
-          versionId,
-          ev.mandatory_verdict,
-          JSON.stringify(ev.mandatory_details),
-          ev.score,
-          JSON.stringify(ev.breakdown),
-        ],
-      );
-      await say(
-        `📋 Oferta registrada: «${title}»${company ? ` — ${company}` : ''}. ` +
-          `Evaluación: ${ev.mandatory_verdict}${ev.score !== null ? ` (encaje ${ev.score.toFixed(2)})` : ''}. ` +
-          (link.status === 'alive'
-            ? 'Enlace verificado: sigue viva.'
-            : 'El enlace no se ha podido verificar del todo, pero la oferta se ha leído bien.'),
-      );
-    }
-    await setJobState(jobId, { offerId, step: 'preparacion' });
+  // 2) Contenidos de la oferta (Exa renderiza la página, JS incluido).
+  const result = testDeps.getContents
+    ? await testDeps.getContents(url)
+    : await defaultGetContents(ctx.config.exaApiKey, url);
+  if (!result || (!result.title && !result.text)) {
+    await say(
+      '⛔ No he podido leer la oferta (la página no devuelve contenido legible). No aplico a ciegas: revisa el enlace o aplica manualmente.',
+    );
+    await setJobState(jobId, { status: 'blocked', step: 'sin_contenido' });
+    return;
+  }
+  // Elegibilidad dura: restringida a nacionales de otro país = nunca
+  // podrás aplicar; no se registra ni se generan documentos.
+  const nat = detectNationalityRestriction({
+    title: result.title,
+    url,
+    highlights: result.highlights ?? [],
+    fullText: result.text,
+  });
+  if (nat.restricted) {
+    await say(
+      `⛔ Esta oferta está restringida a nacionales del país («${nat.phrase ?? 'restricción de nacionalidad'}»). Nunca podrías aplicar a ella, así que no la registro ni genero documentos.`,
+    );
+    await setJobState(jobId, { status: 'blocked', step: 'restriccion_nacionalidad' });
+    return;
+  }
 
-    // 4) Documentos: CV + carta (motor determinista existente).
-    const prep = await prepararCandidatura(campaignId, offerId, { actorId: ctx.actorId });
-    if (!prep.applicationId) {
-      await say(
-        `⛔ No se ha podido preparar la candidatura (motivo: ${prep.motivo ?? 'desconocido'}). ` +
-          (prep.motivo === 'sin_perfil_activo_o_incompleto'
-            ? 'Falta el perfil activo completo en la sección Perfil.'
-            : 'Lo dejo aquí; puedes revisarlo en el panel.'),
-      );
-      await setJobState(jobId, { status: 'blocked', step: 'sin_candidatura' });
-      return;
+  // 2b) Seguir el canal: si el anuncio deriva a un portal externo para
+  // aplicar, el encargo se cumple ALLÍ (y la oferta que se registra es
+  // la del destino, no la del agregador).
+  const applyUrl = extractApplyUrl(result.text, url);
+  if (applyUrl && depth === 0) {
+    let host = applyUrl;
+    try {
+      host = new URL(applyUrl).hostname;
+    } catch {
+      // se muestra la URL tal cual
     }
-    await setJobState(jobId, { applicationId: prep.applicationId, step: 'documentos' });
-    if (prep.motivo === 'ya_en_curso_o_finalizada') {
-      const st = await query<{ status: string }>(
-        `SELECT status FROM applications WHERE id = $1`,
-        [prep.applicationId],
-      );
-      await say(
-        `ℹ️ Ya existe una candidatura para esta oferta en estado «${st[0]?.status ?? prep.status}». No duplico: puedes seguirla en Revisión/Histórico.`,
-      );
-      await setJobState(jobId, { status: 'done', step: 'ya_existia' });
-      return;
-    }
-    const docs = await query<{ kind: string }>(
-      `SELECT DISTINCT kind FROM documents WHERE application_id = $1`,
+    await say(
+      `↪️ Esta oferta no se aplica en esta página: sus instrucciones derivan al portal de la organización (${host}). Sigo el encargo allí.`,
+    );
+    return processOfferUrl(jobId, applyUrl, ctx, campaignId, criteria, depth + 1);
+  }
+
+  const title = result.title ?? 'Oferta sin título';
+  const company = extractCompany({
+    title: result.title,
+    url,
+    text: result.text,
+    author: result.author,
+  });
+
+  // 3) Alta de la oferta en la campaña interna (dedupe por URL canónica).
+  const canon = canonicalUrl(url);
+  let offerId: string;
+  const existing = await query<{ id: string }>(
+    `SELECT id FROM offers WHERE campaign_id = $1 AND canonical_url = $2`,
+    [campaignId, canon],
+  );
+  if (existing.length > 0) {
+    offerId = existing[0].id;
+  } else {
+    const contact = extractApplicationContact(result.title, [
+      ...(result.highlights ?? []),
+      result.text ?? '',
+    ]);
+    const inserted = await query<{ id: string }>(
+      `INSERT INTO offers
+         (campaign_id, search_id, canonical_url, url, title, company,
+          published_date, highlights, raw, application_email, application_notes,
+          url_ok, url_checked_at)
+       VALUES ($1, NULL, $2, $3, $4, $5, $6::date, $7::jsonb, $8::jsonb, $9, $10,
+               $11, now())
+       RETURNING id`,
+      [
+        campaignId,
+        canon,
+        url,
+        result.title ?? null,
+        company,
+        result.publishedDate ?? null,
+        JSON.stringify(result.highlights ?? []),
+        JSON.stringify(result),
+        contact?.email ?? null,
+        contact?.notes ?? null,
+        link.status === 'alive' ? true : null,
+      ],
+    );
+    offerId = inserted[0].id;
+
+    // Evaluación informativa con los hechos del perfil activo.
+    const { facts, versionId } = await loadActiveProfileFacts();
+    const ev = evaluateOffer(
+      { title: result.title, url, highlights: result.highlights ?? [], fullText: result.text },
+      criteria,
+      facts,
+    );
+    await query(
+      `INSERT INTO evaluations
+         (offer_id, campaign_id, profile_version_id, mandatory_verdict,
+          mandatory_details, score, breakdown)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb)
+       ON CONFLICT (offer_id, campaign_id) DO NOTHING`,
+      [
+        offerId,
+        campaignId,
+        versionId,
+        ev.mandatory_verdict,
+        JSON.stringify(ev.mandatory_details),
+        ev.score,
+        JSON.stringify(ev.breakdown),
+      ],
+    );
+    await say(
+      `📋 Oferta registrada: «${title}»${company ? ` — ${company}` : ''}. ` +
+        `Evaluación: ${ev.mandatory_verdict}${ev.score !== null ? ` (encaje ${ev.score.toFixed(2)})` : ''}. ` +
+        (link.status === 'alive'
+          ? 'Enlace verificado: sigue viva.'
+          : 'El enlace no se ha podido verificar del todo, pero la oferta se ha leído bien.'),
+    );
+  }
+  await setJobState(jobId, { offerId, step: 'preparacion' });
+
+  // 4) Documentos: CV + carta (motor determinista existente).
+  const prep = await prepararCandidatura(campaignId, offerId, { actorId: ctx.actorId });
+  if (!prep.applicationId) {
+    await say(
+      `⛔ No se ha podido preparar la candidatura (motivo: ${prep.motivo ?? 'desconocido'}). ` +
+        (prep.motivo === 'sin_perfil_activo_o_incompleto'
+          ? 'Falta el perfil activo completo en la sección Perfil.'
+          : 'Lo dejo aquí; puedes revisarlo en el panel.'),
+    );
+    await setJobState(jobId, { status: 'blocked', step: 'sin_candidatura' });
+    return;
+  }
+  await setJobState(jobId, { applicationId: prep.applicationId, step: 'documentos' });
+  if (prep.motivo === 'ya_en_curso_o_finalizada') {
+    const st = await query<{ status: string }>(
+      `SELECT status FROM applications WHERE id = $1`,
       [prep.applicationId],
     );
     await say(
-      `📄 Documentos generados: ${docs.map((d) => d.kind).join(' + ') || 'CV y carta'}. ` +
-        'Tu orden en este chat cuenta como aprobación expresa: sigo con el envío.',
+      `ℹ️ Ya existe una candidatura para esta oferta en estado «${st[0]?.status ?? prep.status}». No duplico: puedes seguirla en Revisión/Histórico.`,
     );
+    await setJobState(jobId, { status: 'done', step: 'ya_existia' });
+    return;
+  }
+  const docs = await query<{ kind: string }>(
+    `SELECT DISTINCT kind FROM documents WHERE application_id = $1`,
+    [prep.applicationId],
+  );
+  await say(
+    `📄 Documentos generados: ${docs.map((d) => d.kind).join(' + ') || 'CV y carta'}. ` +
+      'Tu orden en este chat cuenta como aprobación expresa: sigo con el envío.',
+  );
 
-    // 5) Canal de envío: solo Personio aplica de forma autónoma hoy.
-    const offerRow = await query<{ application_email: string | null; application_notes: string | null }>(
-      `SELECT application_email, application_notes FROM offers WHERE id = $1`,
-      [offerId],
-    );
-    const portal = detectarPortal(url);
-    if (portal !== 'personio') {
-      const email = offerRow[0]?.application_email;
-      await say(
-        email
-          ? `✉️ Esta oferta se aplica por correo a ${email} (instrucciones del anuncio: «${(offerRow[0]?.application_notes ?? '').slice(0, 200)}»). El envío por email aún no está automatizado (el Gmail del sistema es de solo lectura), así que la dejo preparada en Revisión con los documentos listos para enviar.`
-          : `ℹ️ El portal de esta oferta (${portal}) no tiene driver de envío automático (hoy solo Personio aplica solo). La candidatura queda preparada en Revisión con CV y carta listos; el último paso es manual desde la propia oferta: ${url}`,
-      );
-      await setJobState(jobId, { status: 'done', step: 'preparada_sin_driver' });
-      return;
-    }
+  // 5) Canal de envío.
+  const offerRow = await query<{
+    application_email: string | null;
+    application_notes: string | null;
+  }>(`SELECT application_email, application_notes FROM offers WHERE id = $1`, [offerId]);
+  const portal = detectarPortal(url);
 
-    // 6) Aprobación (la orden del chat) + encadenado de envío.
+  if (portal === 'personio') {
+    // 5a) Personio: aprobación (la orden del chat) + worker.
     await setJobState(jobId, { step: 'aprobacion_envio' });
     await applyDecision(prep.applicationId, 'approve', undefined, ctx.actorId);
     await auditEvent({
@@ -384,7 +440,7 @@ export async function runAgentJob(jobId: string, rawUrl: string, ctx: AgentJobCo
     }
     await say('🚀 Envío encolado: el trabajador está rellenando la candidatura en Personio…');
 
-    // 7) Seguimiento del worker hasta el resultado.
+    // Seguimiento del worker hasta el resultado.
     const pollMs = testDeps.pollMs ?? SEND_POLL_MS;
     const pollMax = testDeps.pollMax ?? SEND_POLL_MAX;
     for (let i = 0; i < pollMax; i++) {
@@ -411,16 +467,110 @@ export async function runAgentJob(jobId: string, rawUrl: string, ctx: AgentJobCo
       '⏳ El envío sigue en curso en el trabajador (tarda más de lo habitual). La candidatura está aprobada y encolada: el resultado aparecerá en Histórico.',
     );
     await setJobState(jobId, { status: 'done', step: 'envio_en_curso' });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'error desconocido';
-    try {
-      await say(`❌ Algo ha fallado en el proceso: ${msg.slice(0, 300)}`);
-      await setJobState(jobId, { status: 'failed', step: 'error' });
-    } catch {
-      // La BD no responde: nada más que hacer aquí.
-    }
+    return;
   }
+
+  const email = offerRow[0]?.application_email;
+  if (email) {
+    // 5b) Canal email: se envía por Gmail con CV y carta adjuntos.
+    await setJobState(jobId, { step: 'envio_email' });
+    const canSend = testDeps.gmailCanSend
+      ? await testDeps.gmailCanSend()
+      : await gmailSendCapable();
+    if (!canSend) {
+      await say(
+        `✉️ Esta oferta se aplica por correo a ${email}, pero el Gmail del sistema todavía no tiene permiso de envío (solo lectura). La dejo preparada en Revisión con el CV y la carta listos. Para que la próxima vez la envíe yo solo, reconecta Gmail en Configuración: pedirá el permiso de envío una única vez.`,
+      );
+      await setJobState(jobId, { status: 'done', step: 'email_sin_permiso_envio' });
+      return;
+    }
+    await applyDecision(prep.applicationId, 'approve', undefined, ctx.actorId);
+    await auditEvent({
+      actorId: ctx.actorId,
+      action: 'agent_application_approved',
+      entityType: 'application',
+      entityId: prep.applicationId,
+      details: { job_id: jobId, url, origen: 'chat_agente', canal: 'email' },
+    });
+    const { facts } = await loadActiveProfileFacts();
+    const candidate = construirPerfilCandidato(facts);
+    const docRows = await query<{ kind: string; file_path: string }>(
+      `SELECT kind, file_path FROM documents
+        WHERE application_id = $1 AND format = 'pdf' ORDER BY kind`,
+      [prep.applicationId],
+    );
+    const attachments = docRows.map((d) => resolve(join(workspaceBase(), d.file_path)));
+    const notesText = offerRow[0]?.application_notes ?? '';
+    const subjectMatch = notesText.match(/(?:subject|asunto)\s*[:\-–]\s*([^\n]{3,90})/i);
+    const subject = subjectMatch
+      ? subjectMatch[1].trim()
+      : `Application: ${title}${candidate ? ` — ${candidate.identity.fullName}` : ''}`;
+    const bodyText = [
+      'Dear Sir or Madam,',
+      '',
+      `I am writing to apply for the position of ${title}${company ? ` at ${company}` : ''}. ` +
+        'Please find attached my CV and cover letter for your consideration.',
+      '',
+      'Kind regards,',
+      candidate?.identity.fullName ?? '',
+      candidate?.identity.email ?? '',
+    ]
+      .filter((l) => l !== '')
+      .join('\n');
+    try {
+      const send =
+        testDeps.sendEmail ?? ((input: GmailApplicationInput) => sendGmailApplication(ctx.config, input));
+      const { messageId } = await send({ to: email, subject, bodyText, attachments });
+      await query(
+        `UPDATE applications
+            SET status = 'submitted', submitted_at = now(),
+                submission_evidence = $2::jsonb, updated_at = now()
+          WHERE id = $1`,
+        [
+          prep.applicationId,
+          JSON.stringify({ channel: 'email', to: email, gmail_message_id: messageId }),
+        ],
+      );
+      await auditEvent({
+        actorId: ctx.actorId,
+        action: 'agent_email_sent',
+        entityType: 'application',
+        entityId: prep.applicationId,
+        details: { job_id: jobId, to: email, gmail_message_id: messageId },
+      });
+      await say(
+        `✅ Candidatura enviada por correo a ${email} con el CV y la carta adjuntos (asunto: «${subject}»). Queda registrada en Histórico con la evidencia del envío.`,
+      );
+      await setJobState(jobId, { status: 'done', step: 'enviada_email' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'error de envío';
+      await query(
+        `UPDATE applications
+            SET status = 'submission_failed', failure_reason = $2, updated_at = now()
+          WHERE id = $1`,
+        [prep.applicationId, `email: ${msg}`.slice(0, 500)],
+      );
+      await say(
+        `❌ He intentado enviar la candidatura por correo a ${email} y Gmail ha fallado: ${msg.slice(0, 200)}. La candidatura queda registrada con el fallo en Revisión.`,
+      );
+      await setJobState(jobId, { status: 'failed', step: 'envio_email_fallido' });
+    }
+    return;
+  }
+
+  // 5c) Portal sin driver: motivo concreto (qué portal y por qué).
+  let host = portal;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    // se usa la etiqueta del portal
+  }
+  await say(
+    `ℹ️ Hasta aquí llego yo solo: el destino final es ${host} (portal «${portal}»), que exige aplicar dentro de su propio sistema — a menudo creando una cuenta — y no tengo un driver de envío verificado para él. La candidatura queda preparada en Revisión con el CV y la carta listos; el paso que falta es aplicar en: ${url}`,
+  );
+  await setJobState(jobId, { status: 'done', step: 'preparada_sin_driver' });
 }
+
 
 // ---------------------------------------------------------------------------
 // Estado para el comando «estado»

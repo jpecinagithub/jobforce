@@ -190,6 +190,111 @@ describe('agente conversacional', () => {
     assert.equal((await query(`SELECT id FROM applications`)).length, 0);
   });
 
+  it('canal email con permiso de envío: aprueba y envía por Gmail con adjuntos', async () => {
+    const EMAIL_URL = 'https://www.devex.com/jobs/finance-manager-email-222';
+    const sent: { to?: string; subject?: string; attachments?: string[] } = {};
+    setAgentTestDeps({
+      getContents: async () => ({
+        id: 'exa-test',
+        title: 'Finance Manager at Acme Corp',
+        url: EMAIL_URL,
+        text:
+          EXA_TEXT +
+          '\n\nHow to apply: interested candidates should send their CV and cover letter to jobs@acme.org indicating Finance Manager in the subject line.',
+        highlights: ['Finance Manager — IFRS, SAP, remote, English.'],
+      }),
+      checkUrl: async () => ({ status: 'alive', via: 'http' }),
+      gmailCanSend: async () => true,
+      sendEmail: async (input) => {
+        sent.to = input.to;
+        sent.subject = input.subject;
+        sent.attachments = input.attachments;
+        return { messageId: 'gmail-msg-1' };
+      },
+    });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${EMAIL_URL}` } });
+    const job = await waitForJob((res.json() as { jobId: string }).jobId);
+    assert.equal(job.status, 'done');
+    assert.equal(job.step, 'enviada_email');
+    assert.equal(sent.to, 'jobs@acme.org');
+    assert.ok((sent.attachments ?? []).length >= 1, 'adjunta los PDF generados');
+    const apps = await query<{ status: string; submission_evidence: { channel?: string } | null }>(
+      `SELECT status, submission_evidence FROM applications`,
+    );
+    assert.equal(apps.length, 1);
+    assert.equal(apps[0].status, 'submitted');
+    assert.equal(apps[0].submission_evidence?.channel, 'email');
+  });
+
+  it('canal email SIN permiso de envío: motivo concreto y preparada, sin aprobar', async () => {
+    const EMAIL_URL = 'https://www.devex.com/jobs/finance-manager-email-333';
+    setAgentTestDeps({
+      getContents: async () => ({
+        id: 'exa-test',
+        title: 'Finance Manager at Acme Corp',
+        url: EMAIL_URL,
+        text: EXA_TEXT + '\n\nTo apply, send your application to hr@acme.org.',
+        highlights: ['Finance Manager — IFRS, SAP, remote, English.'],
+      }),
+      checkUrl: async () => ({ status: 'alive', via: 'http' }),
+      gmailCanSend: async () => false,
+      sendEmail: async () => {
+        throw new Error('no debería llamarse sin permiso');
+      },
+    });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${EMAIL_URL}` } });
+    const job = await waitForJob((res.json() as { jobId: string }).jobId);
+    assert.equal(job.status, 'done');
+    assert.equal(job.step, 'email_sin_permiso_envio');
+    const apps = await query<{ status: string }>(`SELECT status FROM applications`);
+    assert.equal(apps.length, 1);
+    assert.equal(apps[0].status, 'ready_for_review');
+    const msgs = await query<{ content: string }>(
+      `SELECT content FROM agent_messages WHERE role = 'agent'`,
+    );
+    assert.ok(msgs.some((m) => m.content.includes('permiso de envío')), 'mensaje con el motivo');
+  });
+
+  it('derivación: el anuncio remite a Personio → el encargo se cumple allí', async () => {
+    const AGG_URL = 'https://reliefweb.int/job/999000/finance-officer';
+    setAgentTestDeps({
+      getContents: async (u: string) =>
+        u === AGG_URL
+          ? {
+              id: 'exa-agg',
+              title: 'Finance Officer at Sightsavers',
+              url: AGG_URL,
+              text:
+                'Project Finance Officer role in Liberia.\n\n## How to apply\n\nTo apply, please complete your application using the link below:\n\n' +
+                PERSONIO_URL,
+              highlights: ['Finance Officer — NGO, English.'],
+            }
+          : {
+              id: 'exa-test',
+              title: 'Finance Manager at Acme Corp',
+              url: PERSONIO_URL,
+              text: EXA_TEXT,
+              highlights: ['Senior Finance Manager — IFRS reporting, SAP, remote, English.'],
+            },
+      checkUrl: async () => ({ status: 'alive', via: 'http' }),
+      pollMs: 5,
+      pollMax: 2,
+    });
+    setSendTestDeps({ offerProbe: async () => ({ ok: true, detalle: 'viva (fake)' }) });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${AGG_URL}` } });
+    const job = await waitForJob((res.json() as { jobId: string }).jobId);
+    assert.equal(job.status, 'done');
+    assert.equal(job.step, 'envio_en_curso');
+    // La oferta registrada es la del DESTINO (Personio), no el agregador.
+    const offers = await query<{ url: string }>(`SELECT url FROM offers`);
+    assert.equal(offers.length, 1);
+    assert.equal(offers[0].url, PERSONIO_URL);
+    const msgs = await query<{ content: string }>(
+      `SELECT content FROM agent_messages WHERE role = 'agent'`,
+    );
+    assert.ok(msgs.some((m) => m.content.includes('derivan al portal')), 'mensaje de derivación');
+  });
+
   it('portal sin driver (Workday): queda preparada en Revisión, sin aprobar', async () => {
     setAgentTestDeps({
       getContents: async () => ({

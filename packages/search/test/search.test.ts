@@ -12,6 +12,7 @@ import {
   checkUrlAlive,
   checkUrlStatus,
   checkUrlStatusDetailed,
+  extractApplyUrl,
   extractCompany,
   jnjCareersJobUrl,
   reliefWebJobId,
@@ -679,6 +680,48 @@ describe('ReliefWeb (API oficial)', () => {
         { status: 200 },
       )) as typeof fetch;
     assert.equal(await checkUrlStatus(RW), 'broken');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractApplyUrl
+// ---------------------------------------------------------------------------
+
+describe('extractApplyUrl', () => {
+  it('encuentra el enlace en la sección «How to apply» (caso Sightsavers)', () => {
+    const text = [
+      'We are looking for a Project Finance Officer.',
+      '',
+      '## How to apply',
+      '',
+      'To apply for this opportunity, please complete your application using the link provided below:',
+      '',
+      'https://careers.sightsavers.org/jobs/1669?lang=en-us',
+      '',
+      'As an equal opportunity employer, we encourage applications.',
+    ].join('\n');
+    assert.equal(
+      extractApplyUrl(text, 'https://reliefweb.int/job/4234456/project-finance-officer'),
+      'https://careers.sightsavers.org/jobs/1669?lang=en-us',
+    );
+  });
+
+  it('sin sección, usa el enlace con pinta de aplicación (markdown)', () => {
+    const text =
+      'Finance Manager role. [Apply for this job](https://acme.jobs.personio.com/job/123) before Friday. Share: [Facebook](https://facebook.com/share)';
+    assert.equal(
+      extractApplyUrl(text, 'https://www.devex.com/jobs/finance-manager-1'),
+      'https://acme.jobs.personio.com/job/123',
+    );
+  });
+
+  it('sin enlaces útiles → null (no inventa)', () => {
+    assert.equal(extractApplyUrl('A job with no links at all.', 'https://example.org/j/1'), null);
+    assert.equal(
+      extractApplyUrl('Share this job on https://facebook.com/share', 'https://example.org/j/1'),
+      null,
+    );
+    assert.equal(extractApplyUrl(null, 'https://example.org/j/1'), null);
   });
 });
 
