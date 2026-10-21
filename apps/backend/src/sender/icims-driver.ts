@@ -28,6 +28,7 @@
  * `datos_ausentes` nombrando la pregunta exacta — nunca se inventa.
  */
 import { mkdirSync } from 'node:fs';
+import type * as net from 'node:net';
 import { join } from 'node:path';
 
 import { hostCuentaIcims } from '../portal-accounts.js';
@@ -180,7 +181,7 @@ export class IcimsDriver implements BrowserDriver {
   readonly portal = 'icims';
   private browser: PwBrowser | null = null;
   private page: PwPage | null = null;
-  private forwarder: (() => void) | null = null;
+  private forwarder: net.Server | null = null;
 
   private async pageActiva(job: DriverJob): Promise<PwPage> {
     if (this.page) return this.page;
@@ -218,7 +219,7 @@ export class IcimsDriver implements BrowserDriver {
     this.browser = null;
     this.page = null;
     try {
-      this.forwarder?.();
+      this.forwarder?.close();
     } catch {
       // Nada que cerrar.
     }
