@@ -45,7 +45,7 @@ import {
   type OfferProbeResult,
 } from '../routes/sends.js';
 import { marcarEnvioIncierto } from '../reconcile.js';
-import { obtenerOCrearCuentaPortal } from '../portal-accounts.js';
+import { hostCuentaIcims, obtenerOCrearCuentaPortal } from '../portal-accounts.js';
 import { construirPerfilCandidato } from '../prepare.js';
 import { crearDriver } from './driver.js';
 import { IcimsDriver } from './icims-driver.js';
@@ -244,13 +244,13 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
     } catch {
       throw new AnomaliaEnvio('datos_ausentes', `URL de oferta inválida: ${applyUrl}`);
     }
-    // La cuenta se crea contra el host de iCIMS cuando la URL pública
-    // es un alias conocido (p. ej. careers.sightsavers.org →
-    // careers-sightsavers.icims.com): se normaliza por organización.
+    // La cuenta se guarda contra el host del portal iCIMS (la web
+    // pública puede ser un alias de la organización).
+    const cuentaHost = hostCuentaIcims(host);
     const cuenta = deps.cuentaPortal
-      ? await deps.cuentaPortal(host, candidato.identity.email)
+      ? await deps.cuentaPortal(cuentaHost, candidato.identity.email)
       : deps.config
-        ? await obtenerOCrearCuentaPortal(deps.config, host, candidato.identity.email, deps.actorId ?? null)
+        ? await obtenerOCrearCuentaPortal(deps.config, cuentaHost, candidato.identity.email, deps.actorId ?? null)
         : null;
     if (!cuenta) {
       throw new AnomaliaEnvio('datos_ausentes', 'sin config para gestionar la cuenta del portal', {

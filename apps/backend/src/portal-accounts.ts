@@ -16,6 +16,18 @@ import { query } from '@jobforce/database';
 import { auditEvent } from './audit.js';
 import { decryptSecret, encryptSecret, resolveEncryptionKey } from './secrets.js';
 
+/**
+ * Host contra el que se guarda la cuenta iCIMS: el del propio portal.
+ * La web pública puede ser un alias (verificado en vivo 2026-10-21:
+ * careers.sightsavers.org aplica sobre careers-sightsavers.icims.com).
+ */
+export function hostCuentaIcims(host: string): string {
+  const h = host.trim().toLowerCase();
+  if (h.endsWith('icims.com')) return h;
+  if (h === 'careers.sightsavers.org') return 'careers-sightsavers.icims.com';
+  return h;
+}
+
 export interface PortalAccount {
   host: string;
   email: string;
