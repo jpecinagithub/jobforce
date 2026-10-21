@@ -354,7 +354,7 @@ export class WorkableDriver implements BrowserDriver {
         { trasClick: false },
       );
     }
-    const campos = await page.evaluate<CampoW[]>(DESCUBRIR_JS);
+    let campos = await page.evaluate<CampoW[]>(DESCUBRIR_JS);
     let tocados = 0;
     const paisTexto = await this.paisDelPuesto(page);
     const enZonaDerecho = ZONA_DERECHO.some((z) => paisTexto.includes(z));
@@ -410,6 +410,10 @@ export class WorkableDriver implements BrowserDriver {
     }
 
     // --- Radios (preguntas Sí/No y similares) ----------------------------
+    // Re-descubrimiento: la subida del CV dispara el «autofill» de
+    // Workable y la página RE-RENDERIZA el formulario con ids nuevos;
+    // los selectores anteriores quedan obsoletos (visto en vivo).
+    campos = await page.evaluate<CampoW[]>(DESCUBRIR_JS);
     const gruposRadio = new Map<string, CampoW[]>();
     for (const c of campos) {
       if (c.tipo !== 'radio') continue;
