@@ -26,7 +26,7 @@ import type { EvaluationResult } from '@jobforce/eval';
 function makeFakeClient(onCall?: () => void): ExaClient {
   return {
     async getContents() {
-      return { texts: new Map<string, string>(), costDollars: 0 };
+      return { texts: new Map<string, string>(), results: [], costDollars: 0 };
     },
     async search(opts): Promise<ExaSearchResponse> {
       onCall?.();
@@ -449,7 +449,7 @@ describe('campañas', () => {
   it('404 desde el servidor pero Exa trae el texto de la página: se conserva (bloqueo por IP, no roto)', async () => {
     const clientConTexto: ExaClient = {
       async getContents() {
-        return { texts: new Map<string, string>(), costDollars: 0 };
+        return { texts: new Map<string, string>(), results: [], costDollars: 0 };
       },
       async search(): Promise<ExaSearchResponse> {
         return {

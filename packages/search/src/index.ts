@@ -52,6 +52,8 @@ export interface ExaSearchResponse {
 export interface ExaContentsResponse {
   /** url → texto completo de la página. */
   texts: Map<string, string>;
+  /** Resultados completos (título, autor, fecha, texto) por URL pedida. */
+  results: ExaResult[];
   costDollars: number;
 }
 
@@ -300,7 +302,7 @@ export function createExaClient(apiKey: string): ExaClient {
 
   async function getContents(urls: string[]): Promise<ExaContentsResponse> {
     const texts = new Map<string, string>();
-    if (urls.length === 0) return { texts, costDollars: 0 };
+    if (urls.length === 0) return { texts, results: [], costDollars: 0 };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
     let res: Response;
@@ -325,15 +327,34 @@ export function createExaClient(apiKey: string): ExaClient {
       throw new Error(`Exa contents: HTTP ${res.status} ${res.statusText}`);
     }
     const body = (await res.json()) as {
-      results?: Array<{ url?: string; text?: string | null }>;
+      results?: Array<{
+        id?: string;
+        url?: string;
+        title?: string | null;
+        author?: string | null;
+        publishedDate?: string | null;
+        text?: string | null;
+        highlights?: string[] | null;
+      }>;
       costDollars?: { total?: number } | null;
     };
+    const results: ExaResult[] = [];
     for (const r of body.results ?? []) {
-      if (r.url && typeof r.text === 'string' && r.text.trim()) {
+      if (!r.url) continue;
+      if (typeof r.text === 'string' && r.text.trim()) {
         texts.set(r.url, r.text);
       }
+      results.push({
+        id: r.id ?? r.url,
+        title: r.title ?? '',
+        url: r.url,
+        ...(r.author ? { author: r.author } : {}),
+        ...(r.publishedDate ? { publishedDate: r.publishedDate } : {}),
+        ...(Array.isArray(r.highlights) ? { highlights: r.highlights } : {}),
+        ...(typeof r.text === 'string' ? { text: r.text } : {}),
+      });
     }
-    return { texts, costDollars: body.costDollars?.total ?? 0 };
+    return { texts, results, costDollars: body.costDollars?.total ?? 0 };
   }
 
   return { search, getContents };

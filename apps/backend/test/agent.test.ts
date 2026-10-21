@@ -134,6 +134,7 @@ describe('agente conversacional', () => {
   it('flujo completo Personio: ingesta → documentos → aprobada → envío encolado', async () => {
     setAgentTestDeps({
       getContents: async () => ({
+        id: 'exa-test',
         title: 'Finance Manager at Acme Corp',
         url: PERSONIO_URL,
         text: EXA_TEXT,
@@ -199,6 +200,7 @@ describe('agente conversacional', () => {
   it('portal sin driver (Workday): queda preparada en Revisión, sin aprobar', async () => {
     setAgentTestDeps({
       getContents: async () => ({
+        id: 'exa-test',
         title: 'Finance Manager at Acme Corp',
         url: WORKDAY_URL,
         text: EXA_TEXT,

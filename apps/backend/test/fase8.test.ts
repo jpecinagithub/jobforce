@@ -452,7 +452,7 @@ describe('Fase 8.2 — scheduler de búsquedas diarias', () => {
       checkUrlStatus: async () => 'alive',
       createExaClient: (): ExaClient => ({
         async getContents() {
-          return { texts: new Map<string, string>(), costDollars: 0 };
+          return { texts: new Map<string, string>(), results: [], costDollars: 0 };
         },
         async search() {
           return {

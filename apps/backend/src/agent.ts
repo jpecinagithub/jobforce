@@ -34,7 +34,7 @@ import {
   createExaClient,
   extractApplicationContact,
   extractCompany,
-  type ExaSearchResult,
+  type ExaResult,
 } from '@jobforce/search';
 import { auditEvent } from './audit.js';
 import { detectarPortal, prepararCandidatura } from './prepare.js';
@@ -51,7 +51,7 @@ const SEND_POLL_MAX = 30; // ~4 minutos de seguimiento del worker
 // ---------------------------------------------------------------------------
 
 export interface AgentDeps {
-  getContents?: (url: string) => Promise<ExaSearchResult | null>;
+  getContents?: (url: string) => Promise<ExaResult | null>;
   checkUrl?: typeof checkUrlStatusDetailed;
   /** Seguimiento del worker de envíos (tests lo acortan). */
   pollMs?: number;
@@ -168,11 +168,14 @@ export async function getOrCreateDirectCampaign(actorId: string | null): Promise
 // Pipeline
 // ---------------------------------------------------------------------------
 
-async function defaultGetContents(apiKey: string | null, url: string): Promise<ExaSearchResult | null> {
+async function defaultGetContents(apiKey: string | null, url: string): Promise<ExaResult | null> {
   if (!apiKey) return null;
   const client = createExaClient(apiKey);
-  const resp = await client.getContents([url], { text: true, highlights: true });
-  return resp.results[0] ?? null;
+  const resp = await client.getContents([url]);
+  const first = resp.results[0];
+  if (first) return first;
+  const text = resp.texts.get(url);
+  return text ? { id: url, title: '', url, text } : null;
 }
 
 export interface AgentJobContext {
