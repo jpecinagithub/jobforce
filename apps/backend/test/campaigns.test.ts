@@ -633,8 +633,8 @@ describe('campañas sin clave de Exa', () => {
       [id],
     );
     await query(
-      `INSERT INTO evaluations (offer_id, campaign_id, mandatory_verdict)
-       VALUES ($1, $2, 'cumple')`,
+      `INSERT INTO evaluations (offer_id, campaign_id, mandatory_verdict, mandatory_details, score, breakdown)
+       VALUES ($1, $2, 'cumple', '{}'::jsonb, 50, '{}'::jsonb)`,
       [oferta[0].id, id],
     );
     await query(
