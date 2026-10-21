@@ -513,7 +513,9 @@ export class WorkdayDriver implements BrowserDriver {
 
     let altas = 0;
     let entradas = 0;
-    for (let ronda = 0; ronda < 26; ronda++) {
+    let sinAccion = 0;
+    let recargas = 0;
+    for (let ronda = 0; ronda < 30; ronda++) {
       const estado = await clasificar().catch(() => 'desconocido' as Estado);
       if (estado === 'otro_paso') {
         await this.esperarContenido(page);
@@ -560,7 +562,17 @@ export class WorkdayDriver implements BrowserDriver {
         await page.waitForTimeout(2000);
         continue;
       }
-      // 'cargando' o 'desconocido': esperar a que pinte.
+      // 'cargando' o 'desconocido': esperar a que pinte. Si el área
+      // del paso se queda vacía (visto en vivo: esqueleto sin
+      // contenido), recargar la página — el asistente retoma el paso.
+      sinAccion++;
+      if (sinAccion >= 6 && recargas < 2) {
+        recargas++;
+        sinAccion = 0;
+        await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+        await page.waitForTimeout(4000);
+        continue;
+      }
       await page.waitForTimeout(2500);
     }
     const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
