@@ -23,6 +23,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type net from 'node:net';
+import { hostCuentaIcims } from '../portal-accounts.js';
 import { cargarPlaywright, resolveChromiumExe, startForwarder } from './driver.js';
 import {
   AnomaliaEnvio,
@@ -152,10 +153,20 @@ export class IcimsDriver implements BrowserDriver {
       executablePath: resolveChromiumExe(),
       headless: true,
       ...(this.forwarder ? { proxy: { server: 'http://127.0.0.1:18080' } } : {}),
-      args: ['--ignore-certificate-errors', '--no-sandbox', '--disable-dev-shm-usage'],
+      args: [
+        '--ignore-certificate-errors',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+      ],
     })) as unknown as PwBrowser;
     this.browser = browser;
-    const page = await browser.newPage({ viewport: { width: 1360, height: 1000 } });
+    const page = await browser.newPage({
+      viewport: { width: 1360, height: 1000 },
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      locale: 'en-US',
+    });
     this.page = page;
     mkdirSync(job.shotsDir, { recursive: true });
     return page;
@@ -183,11 +194,30 @@ export class IcimsDriver implements BrowserDriver {
     return null;
   }
 
+  /**
+   * URL directa del portal: la página escaparate de la organización
+   * (careers.<org>) devuelve 403 al navegador automatizado desde el
+   * servidor, así que se navega directamente a iCIMS, cuya pantalla
+   * de acceso es la misma a la que lleva el botón Apply (verificado
+   * en vivo: /jobs/<id>/login).
+   */
+  private urlDirecta(job: DriverJob): string {
+    try {
+      const u = new URL(job.applyUrl);
+      if (u.hostname.toLowerCase().endsWith('icims.com')) return job.applyUrl;
+      const m = u.pathname.match(/\/jobs\/(\d+)/);
+      if (m) return `https://${hostCuentaIcims(u.hostname)}/jobs/${m[1]}/login`;
+    } catch {
+      // URL no parseable: se usa tal cual.
+    }
+    return job.applyUrl;
+  }
+
   async verificarApertura(job: DriverJob): Promise<AperturaResultado> {
     const page = await this.pageActiva(job);
     let resp: { status(): number } | null = null;
     try {
-      resp = await page.goto(job.applyUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      resp = await page.goto(this.urlDirecta(job), { waitUntil: 'domcontentloaded', timeout: 60000 });
     } catch (err) {
       throw new AnomaliaEnvio(
         'error_ambiguo',
@@ -219,6 +249,12 @@ export class IcimsDriver implements BrowserDriver {
   /** Desde la página de la oferta hasta el asistente de iCIMS. */
   private async entrarAlAsistente(page: PwPage, job: DriverJob): Promise<void> {
     if (/icims\.com/i.test(page.url())) return;
+    const directa = this.urlDirecta(job);
+    if (directa !== job.applyUrl) {
+      await page.goto(directa, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForTimeout(2500);
+      return;
+    }
     const applyBtn = await this.botonVisible(page, /apply|aplicar|postular/i);
     if (!applyBtn) {
       throw new AnomaliaEnvio('formulario_cambiado', 'no se encuentra el botón de aplicación en la página de la oferta', {
