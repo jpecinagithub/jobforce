@@ -232,11 +232,11 @@ function requireUuid(id: string): void {
  * Aplica una decisión de revisión. Solo desde `ready_for_review`: cualquier
  * otro estado lanza 409. La transición y la auditoría van en una transacción.
  */
-async function applyDecision(
+export async function applyDecision(
   id: string,
   decision: Decision,
   reason: string | undefined,
-  req: FastifyRequest,
+  actorId: string | null,
 ): Promise<ApplicationRow> {
   requireUuid(id);
   return withTransaction(async (client) => {
@@ -263,12 +263,12 @@ async function applyDecision(
         WHERE id = $1
         RETURNING id, campaign_id, offer_id, status, portal,
                   reviewed_at, reviewed_by, created_at, updated_at`,
-      [id, DECISION_TO_STATUS[decision], req.authSession?.userId ?? null, decision === 'reject' ? (reason ?? '') : null],
+      [id, DECISION_TO_STATUS[decision], actorId, decision === 'reject' ? (reason ?? '') : null],
     );
     const row = updated.rows[0];
     await auditEvent(
       {
-        actorId: req.authSession?.userId ?? null,
+        actorId,
         action: DECISION_TO_AUDIT[decision],
         entityType: 'application',
         entityId: id,
@@ -313,7 +313,7 @@ export interface SendChainResult {
  * - Si la política lo bloquea, la aprobación YA registrada se mantiene,
  *   no se encola nada y se abre una intervención con el motivo.
  */
-async function encadenarEnvioTrasAprobacion(
+export async function encadenarEnvioTrasAprobacion(
   applicationId: string,
   actorId: string | null,
 ): Promise<SendChainResult | null> {
@@ -525,7 +525,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
   app.post('/api/applications/:id/approve', mutating, async (req, reply) => {
     const { id } = req.params as { id: string };
     try {
-      const row = await applyDecision(id, 'approve', undefined, req);
+      const row = await applyDecision(id, 'approve', undefined, req.authSession?.userId ?? null);
       const chain = await encadenarEnvioTrasAprobacion(id, req.authSession?.userId ?? null);
       return reply.send({
         ok: true,
@@ -543,7 +543,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     const valid = validateBody(RejectBody, req.body ?? {}, reply);
     if (!valid) return;
     try {
-      const row = await applyDecision(id, 'reject', valid.data.reason, req);
+      const row = await applyDecision(id, 'reject', valid.data.reason, req.authSession?.userId ?? null);
       return reply.send({ ok: true, application: mapApplication(row) });
     } catch (err) {
       return replyReviewError(reply, err);
@@ -565,7 +565,7 @@ export async function registerReviewRoutes(app: FastifyInstance): Promise<void> 
     }> = [];
     for (const id of ids) {
       try {
-        await applyDecision(id, action, reason, req);
+        await applyDecision(id, action, reason, req.authSession?.userId ?? null);
         if (action === 'approve') {
           const chain = await encadenarEnvioTrasAprobacion(
             id,

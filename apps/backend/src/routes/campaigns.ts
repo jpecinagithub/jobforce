@@ -297,7 +297,7 @@ function asStringArray(value: unknown): string[] {
 }
 
 /** Hechos del perfil de la versión ACTIVA (vacío si no hay versión activa). */
-async function loadActiveProfileFacts(): Promise<{
+export async function loadActiveProfileFacts(): Promise<{
   facts: ProfileFactInput[];
   versionId: string | null;
 }> {
