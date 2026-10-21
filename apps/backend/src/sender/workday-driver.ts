@@ -417,29 +417,37 @@ export class WorkdayDriver implements BrowserDriver {
     if (!datos?.cuentaEmail || !datos?.cuentaPassword) {
       throw new AnomaliaEnvio('datos_ausentes', 'sin credenciales de cuenta para Workday');
     }
+    // Workday muestra primero un selector social: el formulario de
+    // email aparece al pulsar «Sign in with email».
+    await this.clickTexto(page, ['sign in with email']).catch(() => null);
     // Esperar a que el formulario de cuenta renderice.
-    for (let i = 0; i < 8; i++) {
-      const t = await this.texto(page);
-      if (/create account|sign in/i.test(t) && (await page.$('input[type="password"]'))) break;
+    for (let i = 0; i < 10; i++) {
+      if (await page.$('input[type="password"]')) break;
       await page.waitForTimeout(1500);
     }
     let texto = await this.texto(page);
-    // Si estamos en Sign In y existe la opción de crear cuenta, ir allí.
-    if (/sign in/i.test(texto) && !/create account/i.test(texto.split('\n')[0] ?? '')) {
-      await this.clickTexto(page, ['create account']).catch(() => null);
-      await page.waitForTimeout(2000);
-      texto = await this.texto(page);
+    // Si el formulario está en modo Sign In (1 contraseña) y hay un
+    // enlace a «Create Account», pasar a crear (primera vez aquí).
+    let numPass = await page.evaluate<number>(
+      `[...document.querySelectorAll('input[type="password"]')].filter(e => e.offsetWidth || e.offsetHeight).length`,
+    );
+    if (numPass === 1) {
+      const toggled = await this.clickTexto(page, ['create account']).catch(() => null);
+      if (toggled) {
+        await page.waitForTimeout(2500);
+        numPass = await page.evaluate<number>(
+          `[...document.querySelectorAll('input[type="password"]')].filter(e => e.offsetWidth || e.offsetHeight).length`,
+        );
+        texto = await this.texto(page);
+      }
     }
-    const esCrear = /create account/i.test(texto);
+    const esCrear = numPass >= 2;
     const emailSel = (await page.$('input[type="email"]')) ? 'input[type="email"]' : 'input[name*="email" i], input[id*="email" i]';
     await page.fill(emailSel, datos.cuentaEmail).catch(async () => {
       // Respaldo: primer input de texto visible.
       await page.fill('input[type="text"]', datos.cuentaEmail);
     });
-    const passwords = await page.evaluate<number>(
-      `[...document.querySelectorAll('input[type="password"]')].filter(e => e.offsetWidth || e.offsetHeight).length`,
-    );
-    for (let i = 0; i < passwords; i++) {
+    for (let i = 0; i < numPass; i++) {
       await page
         .fill(`input[type="password"] >> nth=${i}`, datos.cuentaPassword)
         .catch(() => undefined);
