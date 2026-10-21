@@ -115,7 +115,7 @@ const DESCUBRIR_JS = `(function () {
       var fs = e.closest('fieldset');
       if (fs && fs.parentElement) {
         var resto = (fs.parentElement.textContent || '').split(fs.textContent || '').join('').trim();
-        if (resto) grupo = resto.replace(/^\*\s*/, '');
+        if (resto) grupo = resto.replace(/^\\*\\s*/, '');
       }
       if (!grupo) grupo = etiqueta;
     } else {
