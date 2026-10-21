@@ -176,6 +176,8 @@ export interface SearchSummary {
     query: string;
     results_count: number;
     duplicates_count: number;
+    /** Ofertas descartadas por enlace confirmado roto (no entran al pool). */
+    broken_count?: number;
     cost_usd: number | string;
   }[];
   total_cost_usd: number | string;

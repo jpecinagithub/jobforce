@@ -426,37 +426,114 @@ export function canonicalUrl(url: string): string {
   }
 }
 
-const URL_CHECK_TIMEOUT_MS = 8_000;
+const URL_CHECK_TIMEOUT_MS = 10_000;
 
 /**
- * Comprueba si una URL de oferta sigue viva (HEAD, con fallback a GET
- * parcial). Devuelve true si responde con estado < 400.
- *
- * No lanza: cualquier error de red, timeout o estado >= 400 → false.
+ * Estado de una URL de oferta tras la sonda de vigencia:
+ * - `alive`: respondió con estado < 400 (existe y se puede abrir).
+ * - `broken`: CONFIRMADO roto — 404/410 verificado con dos métodos, o el
+ *   dominio no existe (DNS ENOTFOUND en ambos intentos). Solo este estado
+ *   autoriza a descartar la oferta y a enseñar la etiqueta «enlace roto».
+ * - `unknown`: no se puede afirmar nada — el portal bloquea la sonda
+ *   (401/403/406/429), error transitorio (5xx, timeout, TLS, conexión
+ *   rechazada) o respuesta ambigua. Lo desconocido NUNCA es «roto»:
+ *   ReliefWeb, por ejemplo, devuelve 403/404 a agentes no-navegador en
+ *   ofertas perfectamente vivas (falsos «enlace roto» del 2026-10-20: la
+ *   sonda vieja marcaba rotas 27 de 108 ofertas, casi todas vivas).
  */
-export async function checkUrlAlive(url: string): Promise<boolean> {
+export type UrlStatus = 'alive' | 'broken' | 'unknown';
+
+/** Cabeceras de navegador: la sonda se presenta como un navegador más. */
+const URL_CHECK_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en,es;q=0.8',
+};
+
+/** Códigos de error de red que puede traer la cadena de causas de undici. */
+function errorCodes(err: unknown): Set<string> {
+  const codes = new Set<string>();
+  const visit = (e: unknown, depth: number): void => {
+    if (!e || typeof e !== 'object' || depth > 4) return;
+    const rec = e as { code?: unknown; cause?: unknown; errors?: unknown };
+    if (typeof rec.code === 'string') codes.add(rec.code);
+    if (Array.isArray(rec.errors)) for (const sub of rec.errors) visit(sub, depth + 1);
+    visit(rec.cause, depth + 1);
+  };
+  visit(err, 0);
+  return codes;
+}
+
+type ProbeOutcome = { kind: 'status'; status: number } | { kind: 'error'; err: unknown };
+
+/** Una sonda HTTP con timeout propio. Nunca lanza. */
+async function probeUrl(url: string, method: 'HEAD' | 'GET'): Promise<ProbeOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), URL_CHECK_TIMEOUT_MS);
   try {
-    let res = await fetch(url, {
-      method: 'HEAD',
+    const res = await fetch(url, {
+      method,
       redirect: 'follow',
       signal: controller.signal,
-      headers: { 'User-Agent': 'JOBFORCE-linkcheck/1.0' },
+      headers:
+        method === 'GET' ? { ...URL_CHECK_HEADERS, Range: 'bytes=0-1023' } : URL_CHECK_HEADERS,
     });
-    if (res.status === 405 || res.status === 501) {
-      // Algunos servidores no aceptan HEAD: reintenta con GET parcial.
-      res = await fetch(url, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: { 'User-Agent': 'JOBFORCE-linkcheck/1.0', Range: 'bytes=0-1023' },
-      });
+    // No necesitamos el cuerpo: se cancela para no descargar la página.
+    try {
+      await res.body?.cancel();
+    } catch {
+      // Sin efecto: el estado ya se conoce.
     }
-    return res.status < 400;
-  } catch {
-    return false;
+    return { kind: 'status', status: res.status };
+  } catch (err) {
+    return { kind: 'error', err };
   } finally {
     clearTimeout(timer);
   }
+}
+
+const isGoneStatus = (status: number): boolean => status === 404 || status === 410;
+const isDnsGone = (err: unknown): boolean => errorCodes(err).has('ENOTFOUND');
+
+/**
+ * Sonda de vigencia en dos pasos (HEAD y, si no es concluyente, GET
+ * parcial, ambos con cabeceras de navegador). «Roto» exige evidencia
+ * doble y del mismo signo; cualquier bloqueo anti-bots o fallo
+ * transitorio queda en `unknown`. Nunca lanza.
+ */
+export async function checkUrlStatus(url: string): Promise<UrlStatus> {
+  const head = await probeUrl(url, 'HEAD');
+  if (head.kind === 'status' && head.status < 400) return 'alive';
+  if (head.kind === 'error' && !isDnsGone(head.err)) {
+    // Fallo transitorio (timeout/TLS/red): sin evidencia de que la
+    // página no exista; un segundo intento no lo convertiría en prueba.
+    // Solo el DNS «no existe» merece confirmación con el segundo método.
+    return 'unknown';
+  }
+
+  const get = await probeUrl(url, 'GET');
+  if (get.kind === 'status') {
+    if (get.status < 400) return 'alive';
+    // Roto confirmado solo si AMBOS métodos dicen «no existe».
+    if (isGoneStatus(get.status) && head.kind === 'status' && isGoneStatus(head.status)) {
+      return 'broken';
+    }
+    if (isGoneStatus(get.status) && head.kind === 'error' && isDnsGone(head.err)) {
+      return 'broken';
+    }
+    return 'unknown';
+  }
+  // Ambos intentos sin respuesta: roto solo si el dominio no existe.
+  return isDnsGone(get.err) ? 'broken' : 'unknown';
+}
+
+/**
+ * Compatibilidad: «viva» solo con evidencia positiva (estado < 400).
+ * `broken` y `unknown` devuelven false (la sonda de pre-envío sigue
+ * siendo conservadora), pero quien necesite distinguir el roto
+ * confirmado de lo no comprobado debe usar `checkUrlStatus`.
+ */
+export async function checkUrlAlive(url: string): Promise<boolean> {
+  return (await checkUrlStatus(url)) === 'alive';
 }

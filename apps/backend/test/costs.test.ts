@@ -160,7 +160,7 @@ describe('costes (Fase 5)', () => {
   });
 
   it('la búsqueda de Exa registra eventos exa_search en el libro', async () => {
-    setCampaignTestDeps({ createExaClient: () => makeFakeClient(false) });
+    setCampaignTestDeps({ createExaClient: () => makeFakeClient(false), checkUrlStatus: async () => 'alive' });
     const campId = await createCampaign();
     const res = await app.inject({
       method: 'POST',
@@ -193,7 +193,7 @@ describe('costes (Fase 5)', () => {
   });
 
   it('presupuesto diario agotado bloquea la búsqueda (409)', async () => {
-    setCampaignTestDeps({ createExaClient: () => makeFakeClient(false) });
+    setCampaignTestDeps({ createExaClient: () => makeFakeClient(false), checkUrlStatus: async () => 'alive' });
     const campId = await createCampaign();
     await app.inject({
       method: 'POST',
@@ -218,7 +218,7 @@ describe('costes (Fase 5)', () => {
   });
 
   it('5 fallos seguidos de Exa abren el breaker y la siguiente búsqueda da 503', async () => {
-    setCampaignTestDeps({ createExaClient: () => makeFakeClient(true) });
+    setCampaignTestDeps({ createExaClient: () => makeFakeClient(true), checkUrlStatus: async () => 'alive' });
     const campId = await createCampaign();
     // 5 consultas que fallan → 5 fallos seguidos → circuito abierto.
     const r1 = await app.inject({
@@ -266,7 +266,7 @@ describe('costes (Fase 5)', () => {
 
   it('un éxito tras fallos resetea el contador del breaker', async () => {
     // 4 fallos y luego un éxito: el contador vuelve a 0.
-    setCampaignTestDeps({ createExaClient: () => makeFakeClient(true) });
+    setCampaignTestDeps({ createExaClient: () => makeFakeClient(true), checkUrlStatus: async () => 'alive' });
     const campId = await createCampaign();
     await app.inject({
       method: 'POST',
@@ -274,7 +274,7 @@ describe('costes (Fase 5)', () => {
       payload: { queries: ['a', 'b', 'c', 'd'] },
       headers: authed(auth),
     });
-    setCampaignTestDeps({ createExaClient: () => makeFakeClient(false) });
+    setCampaignTestDeps({ createExaClient: () => makeFakeClient(false), checkUrlStatus: async () => 'alive' });
     await app.inject({
       method: 'POST',
       url: `/api/campaigns/${campId}/search`,

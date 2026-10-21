@@ -10,6 +10,7 @@ import {
   generateQueries,
   canonicalUrl,
   checkUrlAlive,
+  checkUrlStatus,
   looksLikePersonProfile,
   extractApplicationContact,
   selectQueries,
@@ -404,5 +405,82 @@ describe('checkUrlAlive', () => {
       throw new Error('boom');
     }) as typeof fetch;
     assert.equal(await checkUrlAlive('https://example.com/oferta'), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkUrlStatus (tri-estado: la etiqueta «enlace roto» exige confirmación)
+// ---------------------------------------------------------------------------
+
+describe('checkUrlStatus', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const stubStatus = (status: number) => {
+    globalThis.fetch = (async () => new Response(null, { status })) as typeof fetch;
+  };
+
+  const stubByMethod = (head: number, get: number) => {
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) =>
+      new Response(null, { status: init?.method === 'GET' ? get : head })) as typeof fetch;
+  };
+
+  const dnsError = () =>
+    Object.assign(new Error('fetch failed'), {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND portal.example'), {
+        code: 'ENOTFOUND',
+      }),
+    });
+
+  it('200 → alive', async () => {
+    stubStatus(200);
+    assert.equal(await checkUrlStatus('https://example.com/oferta'), 'alive');
+  });
+
+  it('404 en HEAD y GET → broken (confirmado)', async () => {
+    stubByMethod(404, 404);
+    assert.equal(await checkUrlStatus('https://example.com/muerta'), 'broken');
+  });
+
+  it('410 en HEAD y GET → broken (confirmado)', async () => {
+    stubByMethod(410, 410);
+    assert.equal(await checkUrlStatus('https://example.com/muerta'), 'broken');
+  });
+
+  it('404 en HEAD pero 200 en GET → alive (el HEAD mentía)', async () => {
+    stubByMethod(404, 200);
+    assert.equal(await checkUrlStatus('https://example.com/oferta'), 'alive');
+  });
+
+  it('403 en ambos → unknown (muro anti-bots, no es un roto)', async () => {
+    stubByMethod(403, 403);
+    assert.equal(await checkUrlStatus('https://example.com/protegida'), 'unknown');
+  });
+
+  it('404 en HEAD pero 403 en GET → unknown (sin confirmación)', async () => {
+    stubByMethod(404, 403);
+    assert.equal(await checkUrlStatus('https://example.com/dudosa'), 'unknown');
+  });
+
+  it('500 → unknown (fallo transitorio del portal)', async () => {
+    stubStatus(500);
+    assert.equal(await checkUrlStatus('https://example.com/caida'), 'unknown');
+  });
+
+  it('dominio inexistente (ENOTFOUND en ambos) → broken', async () => {
+    globalThis.fetch = (async () => {
+      throw dnsError();
+    }) as typeof fetch;
+    assert.equal(await checkUrlStatus('https://no-existe.example/oferta'), 'broken');
+  });
+
+  it('error de red genérico → unknown', async () => {
+    globalThis.fetch = (async () => {
+      throw new Error('boom');
+    }) as typeof fetch;
+    assert.equal(await checkUrlStatus('https://example.com/oferta'), 'unknown');
   });
 });

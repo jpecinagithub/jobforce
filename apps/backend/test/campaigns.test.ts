@@ -256,6 +256,7 @@ describe('campañas', () => {
         llamadas += 1;
         return makeFakeClient();
       },
+      checkUrlStatus: async () => 'alive',
     });
 
     const res = await app.inject({
@@ -285,6 +286,7 @@ describe('campañas', () => {
     setCampaignTestDeps({
       createExaClient: () => makeFakeClient(),
       evaluateOffer: (offer, criteria, facts) => fakeEvaluateOffer(offer),
+      checkUrlStatus: async () => 'alive',
     });
     const id = await createCampaign(app, auth);
 
@@ -383,10 +385,72 @@ describe('campañas', () => {
     assert.equal(Number(saved[0].n), 1, 'el informe debe quedar guardado');
   });
 
+  it('enlace CONFIRMADO roto: la oferta no entra en el pool y se cuenta aparte', async () => {
+    setCampaignTestDeps({
+      createExaClient: () => makeFakeClient(),
+      evaluateOffer: (offer, criteria, facts) => fakeEvaluateOffer(offer),
+      checkUrlStatus: async (url) => (url.includes('junior') ? 'broken' : 'alive'),
+    });
+    const id = await createCampaign(app, auth);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/campaigns/${id}/search`,
+      payload: { queries: ['CFO Europa'], num_results: 3 },
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json<{ searches: Array<{ broken_count: number }> }>();
+    assert.equal(body.searches[0].broken_count, 1, 'la rota confirmada se cuenta como tal');
+
+    const offersRes = await app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${id}/offers`,
+      headers: authed(auth, false),
+    });
+    const offers = offersRes.json<{
+      offers: Array<{ title: string | null; url_ok: boolean | null }>;
+    }>().offers;
+    assert.equal(offers.length, 1, 'la oferta rota no debe quedar en el pool');
+    assert.equal(offers[0].title, 'CFO — Acme');
+    assert.equal(offers[0].url_ok, true);
+  });
+
+  it('enlace dudoso (la sonda no puede confirmar): la oferta se conserva sin etiqueta de roto', async () => {
+    setCampaignTestDeps({
+      createExaClient: () => makeFakeClient(),
+      evaluateOffer: (offer, criteria, facts) => fakeEvaluateOffer(offer),
+      checkUrlStatus: async () => 'unknown',
+    });
+    const id = await createCampaign(app, auth);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/campaigns/${id}/search`,
+      payload: { queries: ['CFO Europa'], num_results: 3 },
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json<{ searches: Array<{ broken_count: number }> }>();
+    assert.equal(body.searches[0].broken_count, 0);
+
+    const offersRes = await app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${id}/offers`,
+      headers: authed(auth, false),
+    });
+    const offers = offersRes.json<{ offers: Array<{ url_ok: boolean | null }> }>().offers;
+    assert.equal(offers.length, 2, 'lo dudoso NO se descarta');
+    for (const o of offers) {
+      assert.equal(o.url_ok, null, 'lo dudoso queda sin confirmar, nunca como roto');
+    }
+  });
+
   it('un fallo de Exa marca la búsqueda en error y sigue con las demás', async () => {
     setCampaignTestDeps({
       createExaClient: () => makeFakeClient(),
       evaluateOffer: (offer, criteria, facts) => fakeEvaluateOffer(offer),
+      checkUrlStatus: async () => 'alive',
     });
     const id = await createCampaign(app, auth);
 

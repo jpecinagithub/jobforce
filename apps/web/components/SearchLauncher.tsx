@@ -116,6 +116,7 @@ export default function SearchLauncher({ campaignId }: { campaignId: string }) {
                 <th>Consulta</th>
                 <th>Resultados</th>
                 <th>Duplicados</th>
+                <th>Enlaces rotos</th>
                 <th>Coste (USD)</th>
               </tr>
             </thead>
@@ -125,6 +126,7 @@ export default function SearchLauncher({ campaignId }: { campaignId: string }) {
                   <td>{s.query}</td>
                   <td>{s.results_count}</td>
                   <td>{s.duplicates_count}</td>
+                  <td>{s.broken_count ?? 0}</td>
                   <td>{fmtUsd(s.cost_usd, 4)}</td>
                 </tr>
               ))}
@@ -132,7 +134,7 @@ export default function SearchLauncher({ campaignId }: { campaignId: string }) {
             <tfoot>
               <tr>
                 <td><strong>Total</strong></td>
-                <td colSpan={2}></td>
+                <td colSpan={3}></td>
                 <td><strong>{fmtUsd(summary.total_cost_usd, 4)}</strong></td>
               </tr>
             </tfoot>

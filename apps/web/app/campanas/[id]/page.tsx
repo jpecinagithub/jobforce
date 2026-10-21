@@ -144,7 +144,7 @@ export default async function CampaignDetailPage({
                     {o.url_ok === false && (
                       <>
                         {' '}
-                        <span className="badge danger" title="El enlace no responde: la oferta puede haber expirado">
+                        <span className="badge danger" title="Enlace confirmado roto: la página devuelve 404 verificado o el dominio no existe">
                           enlace roto
                         </span>
                       </>

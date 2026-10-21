@@ -32,7 +32,7 @@ import { defaultCriteria } from '@jobforce/domain';
 import { query, withTransaction } from '@jobforce/database';
 import {
   canonicalUrl,
-  checkUrlAlive,
+  checkUrlStatus,
   createExaClient,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
   generateQueries,
@@ -41,6 +41,7 @@ import {
   selectQueries,
   fetchOfferText,
   type ExaClient,
+  type UrlStatus,
 } from '@jobforce/search';
 import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
 import { prepararCandidatura, prepararElegibles } from '../prepare.js';
@@ -62,6 +63,7 @@ import { validateBody } from '../validation.js';
 interface CampaignTestDeps {
   createExaClient?: (apiKey: string) => ExaClient;
   evaluateOffer?: typeof evaluateOffer;
+  checkUrlStatus?: (url: string) => Promise<UrlStatus>;
 }
 
 let testDeps: CampaignTestDeps = {};
@@ -82,6 +84,8 @@ export function resetCampaignTestDeps(): void {
 const exaClientFactory = (): ((apiKey: string) => ExaClient) =>
   testDeps.createExaClient ?? createExaClient;
 const evaluateOfferFn = (): typeof evaluateOffer => testDeps.evaluateOffer ?? evaluateOffer;
+const checkUrlStatusFn = (): ((url: string) => Promise<UrlStatus>) =>
+  testDeps.checkUrlStatus ?? checkUrlStatus;
 
 // ---------------------------------------------------------------------------
 // Esquemas zod.
@@ -356,6 +360,8 @@ export interface BusquedaResumen {
   duplicates_count: number;
   /** Resultados descartados por parecer perfiles de personas, no ofertas. */
   filtered_count: number;
+  /** Ofertas descartadas por enlace CONFIRMADO roto (no entran al pool). */
+  broken_count: number;
   cost_usd: number;
   error?: string;
 }
@@ -427,10 +433,12 @@ export async function ejecutarBusquedaCampana(
       results_count: number;
       duplicates_count: number;
       filtered_count: number;
+      broken_count: number;
       cost_usd: number;
       error?: string;
     }> = [];
     let totalCost = 0;
+    let totalBroken = 0;
 
     // 5) Una búsqueda por consulta; los fallos no tumban el resto.
     for (const searchQuery of resolvedQueries) {
@@ -452,6 +460,7 @@ export async function ejecutarBusquedaCampana(
 
         let insertedCount = 0;
         let filteredCount = 0;
+        let brokenCount = 0;
         const newOffers: Array<{
           id: string;
           title: string;
@@ -505,6 +514,48 @@ export async function ejecutarBusquedaCampana(
           }
         }
         const duplicatesCount = resp.results.length - insertedCount - filteredCount;
+
+        // Validación de enlaces (calidad de búsqueda, corrección
+        // 2026-10-21): se comprueban las URLs de las ofertas nuevas ANTES
+        // de evaluarlas. Solo lo CONFIRMADO roto (404/410 verificado con
+        // HEAD+GET de navegador, o dominio inexistente) se descarta: la
+        // fila se borra y la oferta no entra en el pool de la campaña.
+        // Lo dudoso (el portal bloquea la sonda: 403/429/5xx/timeout)
+        // se conserva con url_ok = null (sin confirmar); lo vivo queda
+        // url_ok = true. La sonda vieja marcaba «roto» cualquier
+        // respuesta >= 400 o error de red: 27 de 108 ofertas llevaban la
+        // etiqueta y casi todas estaban vivas (ReliefWeb y otros portales
+        // bloquean agentes no-navegador). Un fallo de la validación no
+        // bloquea la búsqueda: las ofertas quedan sin comprobar.
+        try {
+          const check = checkUrlStatusFn();
+          const checks = await Promise.all(
+            newOffers.map(async (offer) => ({ id: offer.id, status: await check(offer.url) })),
+          );
+          const brokenIds = new Set(
+            checks.filter((c) => c.status === 'broken').map((c) => c.id),
+          );
+          if (brokenIds.size > 0) {
+            await query(`DELETE FROM offers WHERE id = ANY($1::uuid[])`, [[...brokenIds]]);
+            brokenCount = brokenIds.size;
+            totalBroken += brokenCount;
+            for (let i = newOffers.length - 1; i >= 0; i--) {
+              if (brokenIds.has(newOffers[i].id)) newOffers.splice(i, 1);
+            }
+          }
+          for (const c of checks) {
+            if (c.status === 'alive') {
+              await query(
+                `UPDATE offers SET url_ok = true, url_checked_at = now() WHERE id = $1`,
+                [c.id],
+              );
+            } else if (c.status === 'unknown') {
+              await query(`UPDATE offers SET url_checked_at = now() WHERE id = $1`, [c.id]);
+            }
+          }
+        } catch {
+          // La validación es informativa; un fallo no invalida la búsqueda.
+        }
 
         // Texto completo de las ofertas nuevas (mejora 20-oct-2026): los
         // extractos de Exa dejaban demasiadas ofertas en «sin evidencia».
@@ -571,22 +622,6 @@ export async function ejecutarBusquedaCampana(
             WHERE id = $1`,
           [searchId, resp.requestId ?? null, cost, resp.results.length, duplicatesCount],
         );
-        // Validación de enlaces (calidad de búsqueda): comprueba en paralelo
-        // que las URLs de las ofertas nuevas sigan vivas y lo registra.
-        // No bloquea el flujo si falla: url_ok queda en null (sin comprobar).
-        try {
-          const checks = await Promise.all(
-            newOffers.map(async (offer) => ({ id: offer.id, ok: await checkUrlAlive(offer.url) })),
-          );
-          for (const c of checks) {
-            await query(`UPDATE offers SET url_ok = $2, url_checked_at = now() WHERE id = $1`, [
-              c.id,
-              c.ok,
-            ]);
-          }
-        } catch {
-          // La validación es informativa; un fallo no invalida la búsqueda.
-        }
         await query(
           `UPDATE campaigns SET exa_spent_usd = exa_spent_usd + $2, updated_at = now() WHERE id = $1`,
           [id, cost],
@@ -608,6 +643,7 @@ export async function ejecutarBusquedaCampana(
           results_count: resp.results.length,
           duplicates_count: duplicatesCount,
           filtered_count: filteredCount,
+          broken_count: brokenCount,
           cost_usd: cost,
         });
       } catch (err) {
@@ -624,6 +660,7 @@ export async function ejecutarBusquedaCampana(
           results_count: 0,
           duplicates_count: 0,
           filtered_count: 0,
+          broken_count: 0,
           cost_usd: 0,
           error: message,
         });
@@ -647,7 +684,12 @@ export async function ejecutarBusquedaCampana(
       action: 'search_launched',
       entityType: 'campaign',
       entityId: id,
-      details: { queries: resolvedQueries, total_cost_usd: totalCost, candidaturas_preparadas: preparadas },
+      details: {
+        queries: resolvedQueries,
+        total_cost_usd: totalCost,
+        candidaturas_preparadas: preparadas,
+        enlaces_rotos_descartados: totalBroken,
+      },
     });
     return { ok: true, searches: summaries, total_cost_usd: totalCost };
 }

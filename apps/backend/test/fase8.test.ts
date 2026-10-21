@@ -449,6 +449,7 @@ describe('Fase 8.2 — scheduler de búsquedas diarias', () => {
   it('extremo a extremo: busca con Exa falso, evalúa y prepara la elegible', async () => {
     await seedPerfilActivo();
     setCampaignTestDeps({
+      checkUrlStatus: async () => 'alive',
       createExaClient: (): ExaClient => ({
         async getContents() {
           return { texts: new Map<string, string>(), costDollars: 0 };
