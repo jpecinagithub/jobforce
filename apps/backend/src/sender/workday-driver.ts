@@ -550,12 +550,48 @@ export class WorkdayDriver implements BrowserDriver {
       }
     }
     if (!(await avanzo())) {
-      const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
-      await this.capturar(page, job, 'workday-cuenta-error.png');
-      throw new AnomaliaEnvio(
-        'formulario_cambiado',
-        `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
-      );
+      // Workday REDIRIGE a la página de Sign In del portal cuando el
+      // alta choca con una cuenta existente. Recuperación: entrar en
+      // el portal y re-entrar en la candidatura con la sesión iniciada.
+      const enPortal = (await page.evaluate<string>(PASO_JS).catch(() => '')) === '' &&
+        /sign in with email/i.test(await this.texto(page));
+      if (enPortal) {
+        for (let i = 0; i < 12; i++) {
+          if (await page.$('input[type="password"]')) break;
+          await this.clickTexto(page, ['sign in with email']).catch(() => null);
+          await page.waitForTimeout(2000);
+        }
+        await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
+        await page.fill('input[type="password"]', datos.cuentaPassword).catch(() => undefined);
+        try {
+          const loc = page.getByRole('button', { name: /^sign in$/i }).first();
+          if (await loc.isVisible()) await loc.click();
+        } catch {
+          await this.clickTexto(page, ['sign in']).catch(() => null);
+        }
+        for (let i = 0; i < 10; i++) {
+          await page.waitForTimeout(2500);
+          if (!(await page.$('input[type="password"]'))) break;
+        }
+        // Re-entrar en la candidatura con la sesión ya iniciada.
+        await this.abrirAsistente(page, job);
+      }
+    }
+    if (!(await avanzo())) {
+      // Última tolerancia: si el asistente está presente (hay stepper)
+      // y la sesión está iniciada (sin enlace «Sign In» en cabecera),
+      // el motor de pasos puede avanzar desde la pantalla de cuenta.
+      const pasoNow = await page.evaluate<string>(PASO_JS).catch(() => '');
+      const cabecera = await this.texto(page);
+      const sesionIniciada = pasoNow !== '' && !/^sign in$/im.test(cabecera.split('\n')[2] ?? '');
+      if (!sesionIniciada) {
+        const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
+        await this.capturar(page, job, 'workday-cuenta-error.png');
+        throw new AnomaliaEnvio(
+          'formulario_cambiado',
+          `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
+        );
+      }
     }
     await this.esperarContenido(page);
   }
