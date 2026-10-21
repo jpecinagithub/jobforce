@@ -27,6 +27,7 @@ import { parseAgentCommand, resetAgentTestDeps, setAgentTestDeps } from '../src/
 import { resetSendTestDeps, setSendTestDeps } from '../src/routes/sends.js';
 
 const PERSONIO_URL = 'https://acme.jobs.personio.com/job/1234567';
+const GREENHOUSE_URL = 'https://boards.greenhouse.io/acmecorp/jobs/1234567';
 const WORKDAY_URL =
   'https://acme.wd5.myworkdayjobs.com/en-US/Acme/job/Finance-Manager_R-9001';
 
@@ -352,18 +353,18 @@ describe('agente conversacional', () => {
     assert.equal((await query(`SELECT id FROM sends`)).length, 1);
   });
 
-  it('portal sin driver (Workday): queda preparada en Revisión, sin aprobar', async () => {
+  it('portal sin driver (Greenhouse): queda preparada en Revisión, sin aprobar', async () => {
     setAgentTestDeps({
       getContents: async () => ({
         id: 'exa-test',
         title: 'Finance Manager at Acme Corp',
-        url: WORKDAY_URL,
+        url: GREENHOUSE_URL,
         text: EXA_TEXT,
         highlights: ['Finance Manager — IFRS, SAP, remote, English.'],
       }),
-      checkUrl: async () => ({ status: 'alive', via: 'workday_api' }),
+      checkUrl: async () => ({ status: 'alive', via: 'head' }),
     });
-    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${WORKDAY_URL}` } });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${GREENHOUSE_URL}` } });
     const body = res.json() as { jobId: string };
     const job = await waitForJob(body.jobId);
     assert.equal(job.status, 'done');
