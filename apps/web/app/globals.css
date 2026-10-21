@@ -427,6 +427,9 @@ pre.json {
   padding: 1.75rem;
   max-width: 480px;
   width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
 }
 .modal-body p {

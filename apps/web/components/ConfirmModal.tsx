@@ -1,4 +1,7 @@
+'use client';
+
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * Modal de confirmación con el estilo del panel (Atlas).
@@ -29,7 +32,10 @@ export default function ConfirmModal({
 
   if (!confirmacion) return null;
 
-  return (
+  // Portal a <body>: el modal puede nacer dentro de una tabla (p. ej.
+  // la papelera de ofertas vive en un <td> con white-space: nowrap) y
+  // heredaría su contexto — el texto no envolvía y se salía del panel.
+  return createPortal(
     <div
       className="modal-overlay"
       onClick={onClose}
@@ -57,6 +63,7 @@ export default function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
