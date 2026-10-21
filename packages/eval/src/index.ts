@@ -784,6 +784,11 @@ const NATIONALITY_RESTRICTION_RES: RegExp[] = [
   /\blocally\s+recruited\b/,
   /\bmust\s+be\s+a\s+(?:\w+\s+){0,2}?(?:citizen|national)\s+of\b/,
   /\bmust\s+be\s+a\s+(?:\w+\s+){0,2}?(?:citizen|national)\b/,
+  // Clase ALS (decisión de Jon, 2026-10-21): exigir ya la ciudadanía o
+  // la residencia permanente del país —o el visado por tu cuenta—
+  // también excluye: sin derecho de trabajo allí no puede aplicar.
+  /\bcitizens?\s+or\s+permanent\s+residents?\b/,
+  /\bmust\s+be\s+a\s+permanent\s+resident\b/,
   /\bonly\s+(?:open\s+to|for)\s+(?:\w+\s+){0,2}?(?:nationals|citizens)\b/,
   /\bposte\s+national\b/,
   /\bressortissants?\b/,

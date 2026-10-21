@@ -521,6 +521,17 @@ describe('detectNationalityRestriction', () => {
     );
   });
 
+  it('bloquea la clase ALS: ciudadano o residente permanente (decisión de Jon)', () => {
+    const r = detectNationalityRestriction({
+      title: 'Finance Manager at Alsglobal',
+      url: 'https://alsglobal.wd5.myworkdayjobs.com/x',
+      highlights: [],
+      fullText:
+        'To be eligible to work at ALS you must be a Citizen or Permanent Resident of the country you are applying for, or either hold or be able to obtain, a valid working visa.',
+    });
+    assert.equal(r.restricted, true);
+  });
+
   it('NO bloquea restricciones a su zona: EU / España', () => {
     assert.equal(
       detectNationalityRestriction({
