@@ -81,6 +81,12 @@ interface PwBrowser {
 // JS de descubrimiento (se evalúa en cada marco).
 // ---------------------------------------------------------------------------
 
+type SelectMinimo = {
+  options: ArrayLike<{ textContent: string | null }>;
+  selectedIndex: number;
+  dispatchEvent: (ev: unknown) => boolean;
+};
+
 interface CampoDescubierto {
   sel: string;
   tipo: string;
@@ -532,7 +538,7 @@ export class IcimsDriver implements BrowserDriver {
             const el = await frame.$(c.sel);
             if (el) {
               await el
-                .evaluate((sel: HTMLSelectElement, objetivo: string) => {
+                .evaluate((sel: SelectMinimo, objetivo: string) => {
                   for (let i = 0; i < sel.options.length; i++) {
                     if ((sel.options[i].textContent || '').trim() === objetivo) {
                       sel.selectedIndex = i;
@@ -552,7 +558,7 @@ export class IcimsDriver implements BrowserDriver {
           const el = await frame.$(c.sel);
           if (el) {
             await el
-              .evaluate((sel: HTMLSelectElement, objetivo: string) => {
+              .evaluate((sel: SelectMinimo, objetivo: string) => {
                 const buscado = objetivo.toLowerCase();
                 for (let i = 0; i < sel.options.length; i++) {
                   const t = (sel.options[i].textContent || '').trim();
