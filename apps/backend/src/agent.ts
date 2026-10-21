@@ -269,7 +269,7 @@ export async function runAgentJob(jobId: string, rawUrl: string, ctx: AgentJobCo
       // Evaluación informativa con los hechos del perfil activo.
       const { facts, versionId } = await loadActiveProfileFacts();
       const ev = evaluateOffer(
-        { title: result.title, url, highlights: result.highlights, fullText: result.text },
+        { title: result.title, url, highlights: result.highlights ?? [], fullText: result.text },
         criteria,
         facts,
       );
