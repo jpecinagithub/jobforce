@@ -425,7 +425,34 @@ export class WorkableDriver implements BrowserDriver {
         const objetivo = enZonaDerecho ? /^(yes|sí|si|true)$/i : /^(no|false)$/i;
         const elegida = opciones.find((o) => objetivo.test(o.etiqueta.trim()));
         if (elegida) {
-          await page.click(elegida.sel, { timeout: 6000 }).catch(() => undefined);
+          // Los radios de Workable son visuales: el clic útil es el de
+          // su <label> asociada, y se VERIFICA el estado checked (en
+          // vivo el clic directo no marcó nada y el formulario
+          // rechazó el envío por «Please select one of these options»).
+          let marcado = await page
+            .evaluate<boolean>(`(function () {
+              var el = document.querySelector('${elegida.sel}');
+              if (!el) return false;
+              var lab = el.id ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null;
+              var objetivo = lab || el.closest('label') || el;
+              objetivo.click();
+              return el.checked === true;
+            })()`)
+            .catch(() => false);
+          if (!marcado) {
+            await page.click(elegida.sel, { timeout: 6000 }).catch(() => undefined);
+            marcado = await page
+              .evaluate<boolean>(
+                `(function () { var el = document.querySelector('${elegida.sel}'); return !!el && el.checked === true; })()`,
+              )
+              .catch(() => false);
+          }
+          if (!marcado) {
+            throw new AnomaliaEnvio(
+              'formulario_cambiado',
+              `no se pudo marcar la opción «${elegida.etiqueta}» en la pregunta «${opciones[0].grupo}» de Workable`,
+            );
+          }
           tocados++;
           continue;
         }
