@@ -58,6 +58,7 @@ const PORTALES: Array<{ patron: string; portal: string; nombre: string }> = [
   { patron: 'careers.sightsavers.org', portal: 'icims', nombre: 'iCIMS (Sightsavers)' },
   { patron: 'greenhouse', portal: 'greenhouse', nombre: 'Greenhouse' },
   { patron: 'lever', portal: 'lever', nombre: 'Lever' },
+  { patron: 'workable.com', portal: 'workable', nombre: 'Workable' },
   { patron: 'smartrecruiters', portal: 'smartrecruiters', nombre: 'SmartRecruiters' },
   { patron: 'workday', portal: 'workday', nombre: 'Workday' },
   { patron: 'myworkdayjobs', portal: 'workday', nombre: 'Workday' },
