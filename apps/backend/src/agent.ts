@@ -27,7 +27,7 @@
 
 import { query } from '@jobforce/database';
 import { defaultCriteria, type CampaignCriteria } from '@jobforce/domain';
-import { evaluateOffer } from '@jobforce/eval';
+import { detectNationalityRestriction, evaluateOffer } from '@jobforce/eval';
 import {
   canonicalUrl,
   checkUrlStatusDetailed,
@@ -218,6 +218,20 @@ export async function runAgentJob(jobId: string, rawUrl: string, ctx: AgentJobCo
         '⛔ No he podido leer la oferta (la página no devuelve contenido legible). No aplico a ciegas: revisa el enlace o aplica manualmente.',
       );
       await setJobState(jobId, { status: 'blocked', step: 'sin_contenido' });
+      return;
+    }
+    // Elegibilidad dura: restringida a nacionales de otro país = nunca
+    // podrás aplicar; no se registra ni se generan documentos.
+    const nat = detectNationalityRestriction({
+      title: result.title,
+      highlights: result.highlights ?? [],
+      fullText: result.text,
+    });
+    if (nat.restricted) {
+      await say(
+        `⛔ Esta oferta está restringida a nacionales del país («${nat.phrase ?? 'restricción de nacionalidad'}»). Nunca podrías aplicar a ella, así que no la registro ni genero documentos.`,
+      );
+      await setJobState(jobId, { status: 'blocked', step: 'restriccion_nacionalidad' });
       return;
     }
     const title = result.title ?? 'Oferta sin título';

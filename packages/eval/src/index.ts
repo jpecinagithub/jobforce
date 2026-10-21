@@ -762,3 +762,71 @@ export function evaluateOffer(
 
   return { mandatory_verdict, mandatory_details, score, breakdown };
 }
+
+// ---------------------------------------------------------------------------
+// Elegibilidad: restricción de nacionalidad (puerta dura de ingesta)
+// ---------------------------------------------------------------------------
+
+/**
+ * Frases de restricción EXPLÍCITA a nacionales/locales (texto ya
+ * normalizado: minúsculas y sin diacríticos). Deliberadamente estrechas:
+ * solo formas que excluyen a un candidato internacional («nationals
+ * only», «national position», «local hire», «ressortissants de…»,
+ * «solo nacionales»…). Una mención a personal nacional SIN exclusión
+ * («national and international candidates are welcome») no casa.
+ */
+const NATIONALITY_RESTRICTION_RES: RegExp[] = [
+  /\bnationals?\s+only\b/,
+  /\bnational\s+position\b/,
+  /\bnational\s+staff\s+only\b/,
+  /\bcitizens?\s+only\b/,
+  /\blocal\s+hire\b/,
+  /\blocally\s+recruited\b/,
+  /\bmust\s+be\s+a\s+(?:\w+\s+){0,2}?(?:citizen|national)\s+of\b/,
+  /\bmust\s+be\s+a\s+(?:\w+\s+){0,2}?(?:citizen|national)\b/,
+  /\bonly\s+(?:open\s+to|for)\s+(?:\w+\s+){0,2}?(?:nationals|citizens)\b/,
+  /\bposte\s+national\b/,
+  /\bressortissants?\b/,
+  /\bsolo\s+(?:para\s+)?(?:ciudadanos|nacionales)\b/,
+  /\bnacionales\s+del\s+pais\b/,
+  /\bde\s+nacionalidad\s+\w+\b[^.]{0,40}\b(?:requerida|obligatoria|exigida|excluyente)\b/,
+];
+
+/** Zona de elegibilidad de Jon (ciudadano español/UE): si la frase de la
+ * restricción se refiere a España o a la UE, NO es una exclusión para él.
+ * Los acrónimos se buscan en el texto ORIGINAL (en francés «eu» es el
+ * participio de avoir y «ue» saldría en falso en el texto normalizado). */
+const ELIGIBILITY_ZONE_RE =
+  /\b(spain|espana|spanish|espanol|european|europe|europeen|europeenne|schengen)\b/;
+const ELIGIBILITY_ACRONYM_RE = /\b(EU|UE|EEA|EEE)\b/;
+
+export interface NationalityRestriction {
+  restricted: boolean;
+  /** La frase que lo excluye (para auditoría y mensajes), o null. */
+  phrase: string | null;
+}
+
+/**
+ * ¿La oferta está restringida a nacionales de otro país (o a contratación
+ * local) de forma que Jon NUNCA podría aplicar? Se busca en título,
+ * extractos y texto completo; la frase se devuelve tal cual aparece en la
+ * frase-oración que la contiene. Es una puerta de INGESTA (la oferta ni
+ * entra en el pool), no un criterio más de la evaluación.
+ */
+export function detectNationalityRestriction(offer: EvalOfferInput): NationalityRestriction {
+  const parts = [offer.title ?? '', ...(offer.highlights ?? []), offer.fullText ?? ''];
+  for (const part of parts) {
+    if (!part) continue;
+    const sentences = part.split(/(?<=[.!?;])\s+|\n+/);
+    for (const original of sentences) {
+      const sentence = norm(original);
+      for (const re of NATIONALITY_RESTRICTION_RES) {
+        const m = sentence.match(re);
+        if (!m) continue;
+        if (ELIGIBILITY_ZONE_RE.test(sentence) || ELIGIBILITY_ACRONYM_RE.test(original)) continue;
+        return { restricted: true, phrase: original.trim().slice(0, 220) };
+      }
+    }
+  }
+  return { restricted: false, phrase: null };
+}

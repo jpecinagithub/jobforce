@@ -9,7 +9,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { defaultCriteria } from '@jobforce/domain';
-import { evaluateOffer, norm, type ProfileFactInput } from '../src/index.js';
+import {
+  detectNationalityRestriction,
+  evaluateOffer,
+  norm,
+  type ProfileFactInput,
+} from '../src/index.js';
 
 /** Hechos de perfil ficticios para los tests. */
 const FACTS: ProfileFactInput[] = [
@@ -457,5 +462,104 @@ describe('evaluateOffer', () => {
     assert.equal(ubi?.estado, 'incumple');
     assert.ok(ubi && ubi.evidencia.length > 0);
     assert.equal(res.mandatory_verdict, 'incumple');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Restricción de nacionalidad (puerta dura de ingesta)
+// ---------------------------------------------------------------------------
+
+describe('detectNationalityRestriction', () => {
+  it('bloquea «Kenya Nationals Only» en el título (caso real)', () => {
+    const r = detectNationalityRestriction({
+      title: 'Finance Director - Kenya (Kenya Nationals Only) - Kenya',
+      url: 'https://reliefweb.int/job/4232898/x',
+      highlights: [],
+    });
+    assert.equal(r.restricted, true);
+  });
+
+  it('bloquea «National Position» en el título (caso real, Somalia)', () => {
+    const r = detectNationalityRestriction({
+      title: 'Finance Manager (National Position) - Somalia | ReliefWeb',
+      url: 'https://reliefweb.int/job/4233481/x',
+      highlights: [],
+    });
+    assert.equal(r.restricted, true);
+  });
+
+  it('bloquea la restricción en el cuerpo aunque el título sea neutro', () => {
+    const r = detectNationalityRestriction({
+      title: 'Finance Manager',
+      url: 'https://example.org/job/1',
+      highlights: [],
+      fullText:
+        'We are looking for a Finance Manager. This position is open to Kenyan nationals only. Apply by email.',
+    });
+    assert.equal(r.restricted, true);
+    assert.ok(r.phrase?.includes('Kenyan nationals only'));
+  });
+
+  it('bloquea «local hire» y «must be a citizen of»', () => {
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Accountant',
+        url: 'https://example.org/2',
+        highlights: [],
+        fullText: 'This is a local hire position based in Nairobi.',
+      }).restricted,
+      true,
+    );
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Accountant',
+        url: 'https://example.org/3',
+        highlights: [],
+        fullText: 'Applicants must be a citizen of Nigeria to be considered.',
+      }).restricted,
+      true,
+    );
+  });
+
+  it('NO bloquea restricciones a su zona: EU / España', () => {
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Finance Manager (EU nationals only)',
+        url: 'https://example.org/4',
+        highlights: [],
+      }).restricted,
+      false,
+    );
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Controller',
+        url: 'https://example.org/5',
+        highlights: [],
+        fullText: 'Open to Spanish nationals only, as the role is in Madrid.',
+      }).restricted,
+      false,
+    );
+  });
+
+  it('NO bloquea menciones sin exclusión ni ofertas internacionales', () => {
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Finance Manager',
+        url: 'https://example.org/6',
+        highlights: [],
+        fullText:
+          'We welcome applications from national and international candidates. Visa sponsorship is available for the right candidate.',
+      }).restricted,
+      false,
+    );
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Finance Manager - Sierra Leone',
+        url: 'https://example.org/7',
+        highlights: [],
+        fullText: 'An international role leading the finance team in Freetown.',
+      }).restricted,
+      false,
+    );
   });
 });

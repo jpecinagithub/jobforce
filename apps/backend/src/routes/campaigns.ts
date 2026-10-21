@@ -45,7 +45,11 @@ import {
   type UrlCheckDetail,
   type UrlStatus,
 } from '@jobforce/search';
-import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
+import {
+  detectNationalityRestriction,
+  evaluateOffer,
+  type ProfileFactInput,
+} from '@jobforce/eval';
 import { prepararCandidatura, prepararElegibles } from '../prepare.js';
 import {
   conectorDisponible,
@@ -477,6 +481,20 @@ export async function ejecutarBusquedaCampana(
           // (su directorio «people») como si fueran ofertas; se descartan
           // en la ingesta y no llegan a la tabla de ofertas.
           if (looksLikePersonProfile(result.title)) {
+            filteredCount += 1;
+            continue;
+          }
+          // Elegibilidad dura (regla de Jon, 2026-10-21): una oferta
+          // restringida a nacionales de otro país («nationals only»,
+          // «national position»…) es inaplicable para él SIEMPRE: se
+          // descarta en la ingesta y ni siquiera aparece en el pool.
+          if (
+            detectNationalityRestriction({
+              title: result.title,
+              highlights: result.highlights ?? [],
+              fullText: result.text,
+            }).restricted
+          ) {
             filteredCount += 1;
             continue;
           }
