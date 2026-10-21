@@ -263,17 +263,30 @@ export class IcimsDriver implements BrowserDriver {
     return page.mainFrame();
   }
 
+  /**
+   * Desafío hCaptcha REALMENTE visible: el iframe `frame=challenge`
+   * desplegado. El distintivo pasivo («Protected by hCaptcha») y el
+   * iframe `frame=checkbox` NO cuentan (falso positivo verificado en
+   * vivo el 2026-10-21: la página de acceso paró sin desafío).
+   */
   private async captchaVisible(page: PwPage): Promise<boolean> {
     for (const f of page.frames()) {
-      if (/hcaptcha\.com/i.test(f.url())) {
-        try {
-          const dim = await f.evaluate<{ w: number; h: number }>(
-            `(function () { var b = document.body; return { w: b ? b.offsetWidth : 0, h: b ? b.offsetHeight : 0 }; })()`,
-          );
-          if (dim.w > 200 && dim.h > 60) return true;
-        } catch {
-          // Sin acceso al marco del captcha: se asume pasivo.
-        }
+      try {
+        const hit = await f.evaluate<boolean>(`(function () {
+          var frames = document.querySelectorAll('iframe');
+          for (var i = 0; i < frames.length; i++) {
+            var src = frames[i].src || '';
+            if (/hcaptcha/.test(src) && /frame=challenge/.test(src)) {
+              var st = window.getComputedStyle(frames[i]);
+              if (st.visibility !== 'hidden' && st.display !== 'none' &&
+                  frames[i].offsetWidth > 200 && frames[i].offsetHeight > 100) return true;
+            }
+          }
+          return false;
+        })()`);
+        if (hit) return true;
+      } catch {
+        // Marco inaccesible: se sigue con el siguiente.
       }
     }
     return false;
