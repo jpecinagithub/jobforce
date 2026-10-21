@@ -446,6 +446,54 @@ describe('campañas', () => {
     }
   });
 
+  it('404 desde el servidor pero Exa trae el texto de la página: se conserva (bloqueo por IP, no roto)', async () => {
+    const clientConTexto: ExaClient = {
+      async getContents() {
+        return { texts: new Map<string, string>(), costDollars: 0 };
+      },
+      async search(): Promise<ExaSearchResponse> {
+        return {
+          requestId: 'req-texto',
+          costDollars: 0.001,
+          results: [
+            {
+              id: 't1',
+              title: 'CFO — Gamma',
+              url: 'https://empleo.example/oferta/gamma',
+              highlights: ['Se busca CFO'],
+              text: 'Texto completo de la oferta que Exa acaba de leer.',
+            },
+          ],
+        };
+      },
+    };
+    setCampaignTestDeps({
+      createExaClient: () => clientConTexto,
+      evaluateOffer: (offer, criteria, facts) => fakeEvaluateOffer(offer),
+      checkUrlStatus: async () => 'broken',
+    });
+    const id = await createCampaign(app, auth);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/campaigns/${id}/search`,
+      payload: { queries: ['CFO'], num_results: 1 },
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json<{ searches: Array<{ broken_count: number }> }>();
+    assert.equal(body.searches[0].broken_count, 0, 'con texto de Exa no se descarta aunque la sonda diga 404');
+
+    const offersRes = await app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${id}/offers`,
+      headers: authed(auth, false),
+    });
+    const offers = offersRes.json<{ offers: Array<{ url_ok: boolean | null }> }>().offers;
+    assert.equal(offers.length, 1);
+    assert.equal(offers[0].url_ok, null, 'queda sin confirmar, nunca como rota');
+  });
+
   it('un fallo de Exa marca la búsqueda en error y sigue con las demás', async () => {
     setCampaignTestDeps({
       createExaClient: () => makeFakeClient(),

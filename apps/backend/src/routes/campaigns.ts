@@ -529,9 +529,22 @@ export async function ejecutarBusquedaCampana(
         // bloquea la búsqueda: las ofertas quedan sin comprobar.
         try {
           const check = checkUrlStatusFn();
-          const checks = await Promise.all(
+          const rawChecks = await Promise.all(
             newOffers.map(async (offer) => ({ id: offer.id, status: await check(offer.url) })),
           );
+          // Guarda anti-bloqueo por IP: si Exa trae el texto completo de
+          // la página, la página EXISTE (Exa la acaba de leer); un 404
+          // desde la IP del servidor es entonces el portal bloqueando
+          // IPs de datacenter (caso real Jobera, 2026-10-21: 404 desde
+          // Oracle, 200 desde una conexión normal). Se degrada a
+          // «unknown»: se conserva, sin etiqueta.
+          const checks = rawChecks.map((c) => {
+            if (c.status !== 'broken') return c;
+            const offer = newOffers.find((o) => o.id === c.id);
+            return offer?.exaText && offer.exaText.trim().length > 0
+              ? { id: c.id, status: 'unknown' as UrlStatus }
+              : c;
+          });
           const brokenIds = new Set(
             checks.filter((c) => c.status === 'broken').map((c) => c.id),
           );
