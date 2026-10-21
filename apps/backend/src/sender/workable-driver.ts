@@ -44,7 +44,7 @@ interface PwFrame {
   evaluate<R>(fn: string): Promise<R>;
   $(selector: string): Promise<PwElementHandle | null>;
   $$(selector: string): Promise<PwElementHandle[]>;
-  click(selector: string, opts?: { timeout?: number }): Promise<void>;
+  click(selector: string, opts?: { timeout?: number; position?: { x: number; y: number } }): Promise<void>;
   fill(selector: string, value: string, opts?: { timeout?: number }): Promise<void>;
   setInputFiles(selector: string, files: string | string[]): Promise<void>;
 }
@@ -269,17 +269,6 @@ export class WorkableDriver implements BrowserDriver {
             if (/recaptcha/.test(src) && frames[i].offsetWidth > 200 && frames[i].offsetHeight > 100) {
               var r = frames[i].getBoundingClientRect();
               if (r.bottom > 0 && r.top < window.innerHeight) return true;
-            }
-            if (/challenges\.cloudflare\.com/.test(src)) {
-              var st2 = window.getComputedStyle(frames[i]);
-              if (st2.visibility !== 'hidden' && st2.display !== 'none' && frames[i].offsetWidth > 100) return true;
-            }
-          }
-          // Cloudflare Turnstile: «Verify you are human» sin marcar.
-          if (/verify you are human/i.test(document.body ? (document.body.innerText || '') : '')) {
-            var boxes = document.querySelectorAll('input[type="checkbox"]');
-            for (var b = 0; b < boxes.length; b++) {
-              if (!boxes[b].checked && (boxes[b].offsetWidth || boxes[b].offsetHeight)) return true;
             }
           }
           return false;
@@ -519,9 +508,63 @@ export class WorkableDriver implements BrowserDriver {
     return { camposRellenados: tocados, uploadsOk, capturas };
   }
 
+  /** Marco del widget de Cloudflare Turnstile, si lo hay. */
+  private frameTurnstile(page: PwPage): PwFrame | null {
+    return (
+      page.frames().find((f) => /challenges\.cloudflare\.com/.test(f.url())) ?? null
+    );
+  }
+
+  /**
+   * Turnstile («Verify you are human»): es UN clic de atestación que
+   * Jon ha autorizado expresamente a dar (2026-10-21). Se pulsa la
+   * casilla y se espera el token; si Cloudflare escala a un desafío
+   * visual (el widget se expande), eso NO se resuelve: 'desafio'.
+   */
+  private async completarTurnstile(
+    page: PwPage,
+  ): Promise<'ok' | 'ausente' | 'desafio'> {
+    const frame = this.frameTurnstile(page);
+    if (!frame) return 'ausente';
+    const tokenListo = async (): Promise<boolean> =>
+      page
+        .evaluate<boolean>(
+          `(function () {
+            var t = document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+            return !!t && (t.value || '').length > 20;
+          })()`,
+        )
+        .catch(() => false);
+    if (await tokenListo()) return 'ok';
+    // Clic en la casilla del widget (esquina izquierda del marco).
+    await frame.click('body', { position: { x: 24, y: 24 }, timeout: 8000 }).catch(() => undefined);
+    for (let i = 0; i < 15; i++) {
+      await page.waitForTimeout(1000);
+      if (await tokenListo()) return 'ok';
+      // ¿Desafío visual? El marco crece mucho en altura.
+      const alto = await frame
+        .evaluate<number>(
+          `(function () { return document.documentElement ? document.documentElement.scrollHeight : 0; })()`,
+        )
+        .catch(() => 0);
+      if (alto > 260) return 'desafio';
+    }
+    return (await tokenListo()) ? 'ok' : 'desafio';
+  }
+
   async enviarYConfirmar(job: DriverJob): Promise<ResultadoDriver> {
     const page = await this.pageActiva(job);
     const capturas: string[] = [];
+    // Primero la atestación de Turnstile si el formulario la trae.
+    const turnstile = await this.completarTurnstile(page);
+    if (turnstile === 'desafio') {
+      capturas.push(await this.capturar(page, job, 'workable-turnstile.png'));
+      throw new AnomaliaEnvio(
+        'captcha_mfa',
+        'Cloudflare Turnstile escaló a desafío visual en Workable: ese paso queda para que lo completes tú (la candidatura está rellenada, sin enviar)',
+        { trasClick: false },
+      );
+    }
     const pulsado = await page
       .evaluate<boolean>(`(function () {
         var bs = document.querySelectorAll('button, input[type="submit"]');
