@@ -73,6 +73,7 @@ interface PwBrowser {
 interface CampoW {
   sel: string;
   tipo: string;
+  name: string;
   etiqueta: string;
   grupo: string;
   requerido: boolean;
@@ -93,6 +94,11 @@ const DESCUBRIR_JS = `(function () {
       if (lab) etiqueta = (lab.textContent || '').trim();
     }
     if (!etiqueta) {
+      // Workable envuelve el campo en su <label> («*First name»…).
+      var wrap = e.closest('label');
+      if (wrap) etiqueta = (wrap.textContent || '').trim();
+    }
+    if (!etiqueta) {
       var cont = e.closest('div, li, td, fieldset');
       for (var k = 0; cont && k < 4; k++) {
         var l2 = cont.querySelector ? cont.querySelector('label') : null;
@@ -101,13 +107,19 @@ const DESCUBRIR_JS = `(function () {
       }
     }
     if (!etiqueta) etiqueta = e.getAttribute('aria-label') || e.getAttribute('placeholder') || e.name || e.id || '';
-    // Grupo/pregunta: el encabezado o leyenda más cercano por encima.
+    // Grupo/pregunta: en los radios, el texto de la pregunta es el del
+    // contenedor del <fieldset> DESCONTADAS las opciones («*Right to
+    // Work» + YESNO → «Right to Work»); en el resto, la propia etiqueta.
     var grupo = '';
-    var sec = e.closest('fieldset, section, div');
-    for (var g = 0; sec && g < 5; g++) {
-      var leg = sec.querySelector ? sec.querySelector('legend, h3, h4, [class*="question"], [class*="label"]') : null;
-      if (leg && (leg.textContent || '').trim()) { grupo = (leg.textContent || '').trim(); break; }
-      sec = sec.parentElement;
+    if (tipo === 'radio') {
+      var fs = e.closest('fieldset');
+      if (fs && fs.parentElement) {
+        var resto = (fs.parentElement.textContent || '').split(fs.textContent || '').join('').trim();
+        if (resto) grupo = resto.replace(/^\*\s*/, '');
+      }
+      if (!grupo) grupo = etiqueta;
+    } else {
+      grupo = etiqueta;
     }
     var requerido = !!e.required || e.getAttribute('aria-required') === 'true';
     if (!requerido) {
@@ -118,7 +130,7 @@ const DESCUBRIR_JS = `(function () {
     var idPart = e.id ? '#' + CSS.escape(e.id) : (e.name ? '[name="' + e.name + '"]' : '');
     out.push({
       sel: idPart || (e.tagName.toLowerCase() + ':nth-of-type(' + (i + 1) + ')'),
-      tipo: tipo, etiqueta: etiqueta, grupo: grupo, requerido: requerido,
+      tipo: tipo, name: e.name || '', etiqueta: etiqueta, grupo: grupo, requerido: requerido,
       valor: (e.value || '').toString()
     });
   }
@@ -396,13 +408,13 @@ export class WorkableDriver implements BrowserDriver {
     const gruposRadio = new Map<string, CampoW[]>();
     for (const c of campos) {
       if (c.tipo !== 'radio') continue;
-      const nombre = c.sel;
-      const lista = gruposRadio.get(c.grupo || nombre) ?? [];
+      const claveGrupo = c.name || c.grupo;
+      const lista = gruposRadio.get(claveGrupo) ?? [];
       lista.push(c);
-      gruposRadio.set(c.grupo || nombre, lista);
+      gruposRadio.set(claveGrupo, lista);
     }
-    for (const [grupo, opciones] of gruposRadio) {
-      const g = grupo.toLowerCase();
+    for (const [, opciones] of gruposRadio) {
+      const g = (opciones[0].grupo || '').toLowerCase();
       const esDerecho = /right to work|derecho a trabajar|work permit|autorizaci[oó]n para trabajar|eligible to work/.test(g);
       if (esDerecho) {
         const objetivo = enZonaDerecho ? /^(yes|sí|si|true)$/i : /^(no|false)$/i;
@@ -418,7 +430,7 @@ export class WorkableDriver implements BrowserDriver {
       if (algunoRequerido) {
         throw new AnomaliaEnvio(
           'datos_ausentes',
-          `pregunta obligatoria de Workable sin respuesta determinada en tu perfil: «${grupo || opciones[0].grupo || 'pregunta de opción'}» — dímela y la aplico`,
+          `pregunta obligatoria de Workable sin respuesta determinada en tu perfil: «${opciones[0].grupo || grupo}» — dímela y la aplico`,
         );
       }
     }
