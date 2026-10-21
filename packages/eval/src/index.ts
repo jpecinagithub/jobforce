@@ -795,6 +795,21 @@ const NATIONALITY_RESTRICTION_RES: RegExp[] = [
   /\bsolo\s+(?:para\s+)?(?:ciudadanos|nacionales)\b/,
   /\bnacionales\s+del\s+pais\b/,
   /\bde\s+nacionalidad\s+\w+\b[^.]{0,40}\b(?:requerida|obligatoria|exigida|excluyente)\b/,
+  // Familia «derecho de trabajo ya vigente y sin patrocinio» (caso
+  // real NRC Líbano, 2026-10-21): exigir ser ya elegible para trabajar
+  // en el país, o negar permisos/visado, excluye igual que la
+  // nacionalidad — Jon no tiene ese derecho fuera de España/UE.
+  /\blegally\s+eligible\s+to\s+work\s+in\b/,
+  /\beligible\s+to\s+work\s+in\s+(?!(?:a|an)\s+(?:fast|dynamic|multicultural|diverse|international|collaborative|supportive|challenging)\b)/,
+  /\bmust\s+be\s+eligible\s+to\s+work\b/,
+  /\bunable\s+to\s+provide\b[^.]{0,60}\b(?:work\s+permits?|visa)\b/,
+  /\bunable\s+to\s+sponsor\b/,
+  /\bwill\s+not\s+sponsor\b/,
+  /\bcannot\s+sponsor\b/,
+  /\bno\s+(?:visa\s+)?sponsorship\s+(?:is\s+)?(?:available|provided|offered)\b/,
+  /\bcandidates?\s+must\s+have\s+(?:the\s+)?right\s+to\s+work\b/,
+  /\bexisting\s+right\s+to\s+work\b/,
+  /\bmust\s+have\s+(?:a\s+)?valid\s+(?:work\s+permit|working\s+visa)\b/,
 ];
 
 /** Zona de elegibilidad de Jon (ciudadano español/UE): si la frase de la
@@ -802,7 +817,7 @@ const NATIONALITY_RESTRICTION_RES: RegExp[] = [
  * Los acrónimos se buscan en el texto ORIGINAL (en francés «eu» es el
  * participio de avoir y «ue» saldría en falso en el texto normalizado). */
 const ELIGIBILITY_ZONE_RE =
-  /\b(spain|espana|spanish|espanol|european|europe|europeen|europeenne|schengen)\b/;
+  /\b(spain|espana|spanish|espanol|european|europe|europeen|europeenne|schengen|madrid|barcelona|valencia|sevilla|bilbao|zaragoza|malaga|granada|logrono|germany|france|italy|portugal|netherlands|belgium|ireland|austria|poland|romania|greece|croatia|sweden|denmark|finland|czechia|czech\s+republic|hungary|slovakia|slovenia|estonia|latvia|lithuania|bulgaria|cyprus|malta|luxembourg|alemania|francia|italia|paises\s+bajos|belgica|irlanda|austria|polonia|rumania|grecia|croacia|suecia|dinamarca|finlandia|chequia|hungria|eslovaquia|eslovenia|letonia|lituania|chipre|luxemburgo)\b/;
 const ELIGIBILITY_ACRONYM_RE = /\b(EU|UE|EEA|EEE)\b/;
 
 export interface NationalityRestriction {

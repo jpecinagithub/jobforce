@@ -574,3 +574,49 @@ describe('detectNationalityRestriction', () => {
     );
   });
 });
+
+describe('detectNationalityRestriction — familia derecho de trabajo (NRC)', () => {
+  it('bloquea «legally eligible to work in Lebanon» + «unable to provide work permits» (caso real NRC)', () => {
+    const r = detectNationalityRestriction({
+      title: 'Finance Manager Lebanon',
+      url: 'https://reliefweb.int/job/4233812/x',
+      highlights: [],
+      fullText:
+        'Applicants must be legally eligible to work in Lebanon, We are unable to provide work permits or visa sponsorships for this position.',
+    });
+    assert.equal(r.restricted, true);
+  });
+
+  it('NO bloquea elegibilidad en España/UE (su zona de derecho)', () => {
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Finance Manager',
+        url: 'https://example.org/eu',
+        highlights: [],
+        fullText: 'Candidates must be eligible to work in Spain. We offer a great team.',
+      }).restricted,
+      false,
+    );
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Finance Manager',
+        url: 'https://example.org/de',
+        highlights: [],
+        fullText: 'You must be eligible to work in Germany for this role.',
+      }).restricted,
+      false,
+    );
+  });
+
+  it('NO bloquea la frase de entorno «eligible to work in a fast-paced environment»', () => {
+    assert.equal(
+      detectNationalityRestriction({
+        title: 'Accountant',
+        url: 'https://example.org/env',
+        highlights: [],
+        fullText: 'You are eligible to work in a fast-paced environment and love numbers.',
+      }).restricted,
+      false,
+    );
+  });
+});
