@@ -48,6 +48,10 @@ interface PwFrame {
 }
 
 interface PwPage extends PwFrame {
+  getByRole(
+    role: string,
+    opts?: { name: RegExp },
+  ): { first(): { click(): Promise<void>; isVisible(): Promise<boolean> } };
   goto(
     url: string,
     opts?: { waitUntil?: string; timeout?: number },
@@ -460,11 +464,33 @@ export class WorkdayDriver implements BrowserDriver {
       for (var i = 0; i < cs.length; i++) if ((cs[i].offsetWidth || cs[i].offsetHeight) && !cs[i].checked) cs[i].click();
     })()`);
     await this.capturar(page, job, 'workday-cuenta.png');
-    const boton = esCrear
-      ? await this.clickTexto(page, ['create account'])
-      : await this.clickTexto(page, ['sign in']);
+    // Clic NATIVO (getByRole): el clic JS no disparaba el alta en este
+    // tenant (formulario intacto tras el intento, verificado en vivo).
+    let boton: string | null = null;
+    try {
+      const loc = page.getByRole('button', {
+        name: esCrear ? /create account/i : /sign in/i,
+      }).first();
+      if (await loc.isVisible()) {
+        await loc.click();
+        boton = esCrear ? 'create account' : 'sign in';
+      }
+    } catch {
+      boton = null;
+    }
+    if (!boton) {
+      boton = esCrear
+        ? await this.clickTexto(page, ['create account'])
+        : await this.clickTexto(page, ['sign in']);
+    }
     if (!boton) throw new AnomaliaEnvio('formulario_cambiado', 'sin botón de cuenta en Workday');
-    await page.waitForTimeout(5000);
+    // Sondeo de avance (la creación de cuenta puede tardar >5 s).
+    for (let i = 0; i < 12; i++) {
+      await page.waitForTimeout(2500);
+      const pasoNow = await page.evaluate<string>(PASO_JS).catch(() => '');
+      if (pasoNow && !/create account|sign in/i.test(pasoNow)) break;
+      if (!(await page.$('input[type="password"]'))) break;
+    }
     texto = await this.texto(page);
     if (/verify your email|verification code|check your email|confirm your email/i.test(texto)) {
       await this.capturar(page, job, 'workday-verificacion.png');
