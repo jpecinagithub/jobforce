@@ -123,6 +123,7 @@ export default async function CampaignDetailPage({
             <tr>
               <th>Título</th>
               <th>Empresa</th>
+              <th>Destino</th>
               <th>Veredicto</th>
               <th>Puntuación</th>
               <th>Candidatura</th>
@@ -157,6 +158,7 @@ export default async function CampaignDetailPage({
                       <span title={`Se aplica por email: ${o.application_email}`}> 📧</span>
                     ) : null}
                   </td>
+                  <td>{o.location || '—'}</td>
                   <td>
                     {o.evaluation ? (
                       <span className={verdictBadgeClass(o.evaluation.mandatory_verdict)}>

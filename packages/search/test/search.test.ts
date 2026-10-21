@@ -14,6 +14,7 @@ import {
   checkUrlStatusDetailed,
   extractApplyUrl,
   extractCompany,
+  extractLocation,
   jnjCareersJobUrl,
   reliefWebJobId,
   workdayCxsJobUrl,
@@ -826,6 +827,52 @@ describe('extractCompany', () => {
       extractCompany({
         title: 'Finance Manager - Syrian Arab Republic | ReliefWeb',
         url: 'https://reliefweb.int/job/4233466/finance-manager',
+      }),
+      null,
+    );
+  });
+});
+
+describe('extractLocation (columna DESTINO)', () => {
+  it('ReliefWeb: combina City + Country del texto estructurado', () => {
+    assert.equal(
+      extractLocation({
+        title: 'Finance Manager Lebanon',
+        url: 'https://reliefweb.int/job/4233812/x',
+        text: 'Some intro\nCountry: Lebanon\nCity: Beirut\nClosing date 5 Nov 2026',
+      }),
+      'Beirut, Lebanon',
+    );
+  });
+
+  it('etiqueta Location: en un ATS', () => {
+    assert.equal(
+      extractLocation({
+        title: 'Accounting Manager',
+        url: 'https://x.example/j/1',
+        text: 'About the role\nLocation: Mexico City, Mexico\nApply now',
+      }),
+      'Mexico City, Mexico',
+    );
+  });
+
+  it('sufijo del título ReliefWeb', () => {
+    assert.equal(
+      extractLocation({
+        title: 'Head of Finance & Administration - Somalia | ReliefWeb',
+        url: 'https://reliefweb.int/job/1/x',
+        text: 'sin campos estructurados',
+      }),
+      'Somalia',
+    );
+  });
+
+  it('sin evidencia → null (nunca inventa)', () => {
+    assert.equal(
+      extractLocation({
+        title: 'Finance Manager at Acme',
+        url: 'https://x.example/j/2',
+        text: 'Great role in a great team. Apply by email.',
       }),
       null,
     );

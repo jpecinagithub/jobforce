@@ -35,6 +35,7 @@ import {
   checkUrlStatusDetailed,
   createExaClient,
   extractCompany,
+  extractLocation,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
   generateQueries,
   looksLikePersonProfile,
@@ -258,6 +259,7 @@ interface OfferRow {
   url: string;
   title: string | null;
   company: string | null;
+  location: string | null;
   published_date: string | null;
   retrieved_at: Date;
   highlights: unknown;
@@ -506,8 +508,10 @@ export async function ejecutarBusquedaCampana(
           const rows = await query<{ id: string; title: string | null; url: string; highlights: unknown }>(
             `INSERT INTO offers
                (campaign_id, search_id, canonical_url, url, title, company,
-                published_date, highlights, raw, application_email, application_notes)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::jsonb, $9::jsonb, $10, $11)
+                published_date, highlights, raw, application_email, application_notes,
+                location)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::jsonb, $9::jsonb, $10, $11,
+                     $12)
              ON CONFLICT (campaign_id, canonical_url) DO NOTHING
              RETURNING id, title, url, highlights`,
             [
@@ -530,6 +534,7 @@ export async function ejecutarBusquedaCampana(
               JSON.stringify(result),
               contact?.email ?? null,
               contact?.notes ?? null,
+              extractLocation({ title: result.title, url: result.url, text: result.text }),
             ],
           );
           if (rows.length > 0) {
@@ -917,7 +922,7 @@ export async function registerCampaignRoutes(
     }
     const rows = await query<OfferRow>(
       `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
-              o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
+              o.company, o.location, o.published_date, o.retrieved_at, o.highlights, o.raw,
               o.url_ok, o.url_checked_at, o.application_email, o.application_notes,
               e.mandatory_verdict, e.score, e.breakdown,
               a.id AS application_id, a.status AS application_status
@@ -977,6 +982,7 @@ export async function registerCampaignRoutes(
             }
           : null,
         canonical_url: o.canonical_url,
+        location: o.location,
         published_date: o.published_date,
         retrieved_at: toIso(o.retrieved_at),
         evaluation:
@@ -999,7 +1005,7 @@ export async function registerCampaignRoutes(
     }
     const rows = await query<OfferRow>(
       `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
-              o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
+              o.company, o.location, o.published_date, o.retrieved_at, o.highlights, o.raw,
               e.mandatory_verdict, e.score, e.breakdown, e.mandatory_details,
               a.id AS application_id, a.status AS application_status
          FROM offers o
@@ -1021,6 +1027,7 @@ export async function registerCampaignRoutes(
         company: offer.company,
         url: offer.url,
         canonical_url: offer.canonical_url,
+        location: offer.location,
         published_date: offer.published_date,
         retrieved_at: toIso(offer.retrieved_at),
         highlights: offer.highlights,
@@ -1238,7 +1245,7 @@ export async function registerCampaignRoutes(
     );
     const offers = await query<OfferRow>(
       `SELECT o.id, o.campaign_id, o.search_id, o.canonical_url, o.url, o.title,
-              o.company, o.published_date, o.retrieved_at, o.highlights, o.raw,
+              o.company, o.location, o.published_date, o.retrieved_at, o.highlights, o.raw,
               e.mandatory_verdict, e.score, e.breakdown, e.mandatory_details
          FROM offers o
          LEFT JOIN evaluations e

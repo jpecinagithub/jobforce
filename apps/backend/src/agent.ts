@@ -38,6 +38,7 @@ import {
   extractApplicationContact,
   extractApplyUrl,
   extractCompany,
+  extractLocation,
   type ExaResult,
 } from '@jobforce/search';
 import { auditEvent } from './audit.js';
@@ -326,9 +327,9 @@ async function processOfferUrl(
       `INSERT INTO offers
          (campaign_id, search_id, canonical_url, url, title, company,
           published_date, highlights, raw, application_email, application_notes,
-          url_ok, url_checked_at)
+          url_ok, url_checked_at, location)
        VALUES ($1, NULL, $2, $3, $4, $5, $6::date, $7::jsonb, $8::jsonb, $9, $10,
-               $11, now())
+               $11, now(), $12)
        RETURNING id`,
       [
         campaignId,
@@ -342,6 +343,7 @@ async function processOfferUrl(
         contact?.email ?? null,
         contact?.notes ?? null,
         link.status === 'alive' ? true : null,
+        extractLocation({ title: result.title, url, text: result.text }),
       ],
     );
     offerId = inserted[0].id;

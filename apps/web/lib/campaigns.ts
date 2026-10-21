@@ -119,6 +119,8 @@ export interface OfferSummary {
   id: string;
   title: string | null;
   company: string | null;
+  /** Lugar de trabajo extraído del anuncio (null = no consta). */
+  location: string | null;
   url: string;
   /** null = sin comprobar; true = viva; false = rota. */
   url_ok: boolean | null;
