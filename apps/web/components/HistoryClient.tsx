@@ -70,7 +70,11 @@ export default function HistoryClient() {
       <tbody>
         {items.map((it) => (
           <tr key={it.id}>
-            <td>{fecha(it.submittedAt)}</td>
+            {/* Fecha de aplicación = envío si lo hubo; si la candidatura
+                aún no se envió (en revisión, aprobada, fallida, retirada),
+                la de su creación/preparación: la columna nunca va vacía
+                y el estado ya dice si llegó a enviarse (Jon, 21-oct). */}
+            <td>{fecha(it.submittedAt ?? it.createdAt)}</td>
             <td>{it.offer.company || 'Empresa desconocida'}</td>
             <td>
               <a href={it.offer.url} target="_blank" rel="noreferrer">
