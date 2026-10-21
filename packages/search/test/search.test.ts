@@ -14,6 +14,7 @@ import {
   checkUrlStatusDetailed,
   extractCompany,
   jnjCareersJobUrl,
+  reliefWebJobId,
   workdayCxsJobUrl,
   looksLikePersonProfile,
   extractApplicationContact,
@@ -631,6 +632,53 @@ describe('JnJ (CXS cerrada → careers.jnj.com)', () => {
     }) as typeof fetch;
     assert.deepEqual(await checkUrlStatusDetailed(JJ), { status: 'alive', via: 'workday_api' });
     assert.equal(calls, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ReliefWeb: manda su API (la web miente desde IPs de datacenter)
+// ---------------------------------------------------------------------------
+
+describe('ReliefWeb (API oficial)', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const RW = 'https://reliefweb.int/job/4231682/operational-finance-advisor';
+
+  it('reliefWebJobId extrae el id solo de URLs de oferta de ReliefWeb', () => {
+    assert.equal(reliefWebJobId(RW), '4231682');
+    assert.equal(reliefWebJobId('https://reliefweb.int/jobs'), null);
+    assert.equal(reliefWebJobId('https://example.com/job/4231682'), null);
+  });
+
+  it('API 404 (oferta purgada) → broken', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ status: 404 }), { status: 404 })) as typeof fetch;
+    assert.deepEqual(await checkUrlStatusDetailed(RW), { status: 'broken', via: 'reliefweb_api' });
+  });
+
+  it('API 403 (existe pero appname no aprobado) → unknown', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ status: 403 }), { status: 403 })) as typeof fetch;
+    assert.equal(await checkUrlStatus(RW), 'unknown');
+  });
+
+  it('API 200 publicada sin cierre vencido → alive; expirada → broken', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ data: [{ fields: { status: 'published', date: { closing: '2999-01-01' } } }] }),
+        { status: 200 },
+      )) as typeof fetch;
+    assert.equal(await checkUrlStatus(RW), 'alive');
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ data: [{ fields: { status: 'expired', date: { closing: '2020-01-01' } } }] }),
+        { status: 200 },
+      )) as typeof fetch;
+    assert.equal(await checkUrlStatus(RW), 'broken');
   });
 });
 

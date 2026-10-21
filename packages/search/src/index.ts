@@ -656,7 +656,7 @@ const isGoneStatus = (status: number): boolean => status === 404 || status === 4
 const isDnsGone = (err: unknown): boolean => errorCodes(err).has('ENOTFOUND');
 
 /** Vía que produjo el veredicto: API del portal, sitio del empleador, contenido o sonda HTTP genérica. */
-export type UrlCheckVia = 'workday_api' | 'breezy_content' | 'jnj_careers' | 'http';
+export type UrlCheckVia = 'workday_api' | 'breezy_content' | 'jnj_careers' | 'reliefweb_api' | 'http';
 
 export interface UrlCheckDetail {
   status: UrlStatus;
@@ -797,8 +797,66 @@ export function jnjCareersJobUrl(url: string): string | null {
   }
 }
 
+/** Id numérico de una oferta de ReliefWeb desde su URL pública, o null. */
+export function reliefWebJobId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname !== 'reliefweb.int' && u.hostname !== 'www.reliefweb.int') return null;
+    const m = u.pathname.match(/^\/job\/(\d+)/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ReliefWeb: su web devuelve 200 desde IPs de datacenter incluso para
+ * ofertas ya retiradas (410 «Gone» desde una conexión normal), así que
+ * la sonda por página MIENTE en el servidor. Su API oficial sí es
+ * fiable desde cualquier IP: una oferta retirada/expirada se purga y
+ * la API responde 404 (caso real 2026-10-21: 13 de 28 ofertas del pool
+ * ya no existían y figuraban como vivas). Si la oferta existe, la API
+ * exige un appname aprobado (403): sin él no se puede distinguir
+ * publicada de recién expirada → unknown. Con appname aprobado se
+ * podría además leer status/closing (queda soportado abajo).
+ */
+async function checkReliefWebStatus(id: string): Promise<UrlCheckDetail> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), URL_CHECK_TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://api.reliefweb.int/v2/jobs/${id}?appname=jobforce`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    if (res.status === 404) return { status: 'broken', via: 'reliefweb_api' };
+    if (res.status === 200) {
+      const body = (await res.json().catch(() => null)) as {
+        data?: Array<{ fields?: { status?: string; date?: { closing?: string } } }>;
+      } | null;
+      const fields = body?.data?.[0]?.fields;
+      if (fields?.status && fields.status !== 'published') {
+        return { status: 'broken', via: 'reliefweb_api' };
+      }
+      const closing = fields?.date?.closing;
+      if (closing && new Date(closing).getTime() < Date.now()) {
+        return { status: 'broken', via: 'reliefweb_api' };
+      }
+      if (fields) return { status: 'alive', via: 'reliefweb_api' };
+      return { status: 'unknown', via: 'reliefweb_api' };
+    }
+    return { status: 'unknown', via: 'reliefweb_api' };
+  } catch {
+    return { status: 'unknown', via: 'reliefweb_api' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function checkUrlStatusDetailed(url: string): Promise<UrlCheckDetail> {
   if (isBreezyUrl(url)) return checkBreezyStatus(url);
+  const rwId = reliefWebJobId(url);
+  if (rwId) return checkReliefWebStatus(rwId);
   const cxs = workdayCxsJobUrl(url);
   if (cxs) {
     const api = await probeUrl(cxs, 'GET');
