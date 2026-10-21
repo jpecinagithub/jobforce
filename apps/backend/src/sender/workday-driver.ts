@@ -56,6 +56,7 @@ interface PwPage extends PwFrame {
     url: string,
     opts?: { waitUntil?: string; timeout?: number },
   ): Promise<{ status(): number } | null>;
+  reload(opts?: { waitUntil?: string }): Promise<unknown>;
   waitForTimeout(ms: number): Promise<void>;
   screenshot(opts: { path: string; fullPage?: boolean }): Promise<void>;
   frames(): PwFrame[];
