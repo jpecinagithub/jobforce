@@ -44,7 +44,7 @@ async function main(): Promise<void> {
       // La base de documentos debe coincidir con la de quien los genera
       // (prepare.ts usa la misma función): en el contenedor es
       // /home/app/workspace, con el volumen de documentos montado.
-      deps: { workspaceBase: workspaceBase() },
+      deps: { workspaceBase: workspaceBase(), config },
       onError: (err) => app.log.error({ err }, 'worker de envíos: error en iteración'),
       onResultado: (r) => app.log.info({ resultado: r }, 'worker de envíos: envío procesado'),
     });

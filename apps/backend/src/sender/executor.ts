@@ -29,6 +29,8 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { AppConfig } from '@jobforce/config';
+import type { ProfileFactInput } from '@jobforce/eval';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -43,7 +45,10 @@ import {
   type OfferProbeResult,
 } from '../routes/sends.js';
 import { marcarEnvioIncierto } from '../reconcile.js';
+import { obtenerOCrearCuentaPortal } from '../portal-accounts.js';
+import { construirPerfilCandidato } from '../prepare.js';
 import { crearDriver } from './driver.js';
+import { IcimsDriver } from './icims-driver.js';
 import { presupuestoDisponible, registrarTiempoNavegador } from '@jobforce/costs';
 import {
   AnomaliaEnvio,
@@ -67,6 +72,10 @@ export interface ExecutorDeps {
   workspaceBase?: string;
   /** actorId para la auditoría (null = sistema). */
   actorId?: string | null;
+  /** Config de la app (cuentas de portal cifradas). La pasa index.ts. */
+  config?: AppConfig;
+  /** Cuenta del portal (tests la sustituyen). */
+  cuentaPortal?: (host: string, email: string) => Promise<{ email: string; password: string }>;
 }
 
 type InterventionKind =
@@ -194,6 +203,92 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
     }
   }
 
+  const portal = (app.portal ?? '').trim().toLowerCase();
+  const shotsDir = join(base, 'jobforce', 'sends', send.id, 'capturas');
+  mkdirSync(shotsDir, { recursive: true });
+
+  if (portal === 'icims') {
+    // iCIMS no usa selectores preconfigurados: el driver rellena el
+    // asistente por etiquetas con los datos del perfil y la cuenta
+    // del portal (creada cifrada si no existía).
+    const applyUrl = app.offer_url;
+    if (!applyUrl) {
+      throw new AnomaliaEnvio('datos_ausentes', 'sin URL de la oferta para iCIMS', {
+        contexto: { applicationId: app.id },
+      });
+    }
+    const versions = await query<{ id: string }>(
+      `SELECT id FROM profile_versions WHERE status = 'active' ORDER BY version_no DESC LIMIT 1`,
+    );
+    const factRows =
+      versions.length === 0
+        ? []
+        : await query<{ category: string; key: string; value: unknown }>(
+            `SELECT category, key, value FROM profile_facts WHERE profile_version_id = $1`,
+            [versions[0].id],
+          );
+    const facts: ProfileFactInput[] = factRows.map((f) => ({
+      category: f.category,
+      key: f.key,
+      value: f.value,
+    }));
+    const candidato = construirPerfilCandidato(facts);
+    if (!candidato) {
+      throw new AnomaliaEnvio('datos_ausentes', 'sin perfil activo completo para rellenar iCIMS', {
+        contexto: { applicationId: app.id },
+      });
+    }
+    let host = '';
+    try {
+      host = new URL(applyUrl).hostname;
+    } catch {
+      throw new AnomaliaEnvio('datos_ausentes', `URL de oferta inválida: ${applyUrl}`);
+    }
+    // La cuenta se crea contra el host de iCIMS cuando la URL pública
+    // es un alias conocido (p. ej. careers.sightsavers.org →
+    // careers-sightsavers.icims.com): se normaliza por organización.
+    const cuenta = deps.cuentaPortal
+      ? await deps.cuentaPortal(host, candidato.identity.email)
+      : deps.config
+        ? await obtenerOCrearCuentaPortal(deps.config, host, candidato.identity.email, deps.actorId ?? null)
+        : null;
+    if (!cuenta) {
+      throw new AnomaliaEnvio('datos_ausentes', 'sin config para gestionar la cuenta del portal', {
+        contexto: { applicationId: app.id },
+      });
+    }
+    const nombreCompleto = candidato.identity.fullName.trim();
+    const corte = nombreCompleto.indexOf(' ');
+    const ubicacion = candidato.identity.location ?? '';
+    const job: DriverJob = {
+      sendId: send.id,
+      applicationId: app.id,
+      portal,
+      applyUrl,
+      campos: [],
+      cvPath,
+      cartaPath,
+      docCvSelector: '',
+      docCartaSelector: '',
+      shotsDir,
+      submitButtonName: 'submit application',
+      icims: {
+        nombre: corte > 0 ? nombreCompleto.slice(0, corte) : nombreCompleto,
+        apellidos: corte > 0 ? nombreCompleto.slice(corte + 1) : '',
+        email: candidato.identity.email,
+        telefono: candidato.identity.phone ?? '',
+        ubicacion,
+        paisResidencia: ubicacion.includes(',')
+          ? ubicacion.slice(ubicacion.lastIndexOf(',') + 1).trim()
+          : ubicacion,
+        linkedin: candidato.identity.linkedIn ?? '',
+        cuentaEmail: cuenta.email,
+        cuentaPassword: cuenta.password,
+      },
+    };
+    return { send, app, job };
+  }
+
   const formConfig = parseFormConfig(app.offer_snapshot);
   if (!formConfig) {
     throw new AnomaliaEnvio(
@@ -209,13 +304,10 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
     });
   }
 
-  const shotsDir = join(base, 'jobforce', 'sends', send.id, 'capturas');
-  mkdirSync(shotsDir, { recursive: true });
-
   const job: DriverJob = {
     sendId: send.id,
     applicationId: app.id,
-    portal: (app.portal ?? '').trim().toLowerCase(),
+    portal,
     applyUrl,
     campos: formConfig.campos,
     cvPath,
@@ -456,7 +548,9 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
 
     // 5) Driver (puede lanzar portal_no_soportado).
     try {
-      const factory = deps.driverFactory ?? ((j: DriverJob) => crearDriver(j.portal));
+      const factory =
+        deps.driverFactory ??
+        ((j: DriverJob) => (j.portal === 'icims' ? new IcimsDriver() : crearDriver(j.portal)));
       driver = factory(job);
     } catch (e) {
       if (e instanceof AnomaliaEnvio) {

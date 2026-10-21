@@ -70,6 +70,18 @@ export interface DriverJob {
   shotsDir: string;
   /** Nombre del botón de envío (fuente de RegExp, p. ej. "submit application"). */
   submitButtonName: string;
+  /** Solo iCIMS: datos del candidato y de la cuenta del portal. */
+  icims?: {
+    nombre: string;
+    apellidos: string;
+    email: string;
+    telefono: string;
+    ubicacion: string;
+    paisResidencia: string;
+    linkedin: string;
+    cuentaEmail: string;
+    cuentaPassword: string;
+  };
 }
 
 export interface AperturaResultado {

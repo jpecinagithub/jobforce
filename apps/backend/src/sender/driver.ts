@@ -472,9 +472,9 @@ export class PersonioDriver implements BrowserDriver {
 }
 
 /**
- * Factoría de drivers por portal. Solo Personio está implementado y probado
- * en vivo (Fase 3); cualquier otro portal lanza `portal_no_soportado` en vez
- * de simular un envío.
+ * Factoría de drivers por portal. Solo Personio vive aquí; el driver
+ * de iCIMS lo compone el ejecutor (evita el ciclo driver ↔ icims).
+ * Cualquier otro portal lanza `portal_no_soportado` en vez de simular.
  */
 export function crearDriver(portal: string): BrowserDriver {
   const p = portal.trim().toLowerCase();

@@ -295,6 +295,35 @@ describe('agente conversacional', () => {
     assert.ok(msgs.some((m) => m.content.includes('derivan al portal')), 'mensaje de derivación');
   });
 
+  it('flujo iCIMS (Sightsavers): aprueba con orden directa y encola el envío', async () => {
+    const ICIMS_URL = 'https://careers.sightsavers.org/jobs/1669?lang=en-us';
+    setAgentTestDeps({
+      getContents: async () => ({
+        id: 'exa-test',
+        title: 'Project Finance Officer in Monrovia, Liberia | Sightsavers',
+        url: ICIMS_URL,
+        text: EXA_TEXT,
+        highlights: ['Finance Officer — NGO finance, IFRS, English, Monrovia.'],
+      }),
+      checkUrl: async () => ({ status: 'alive', via: 'http' }),
+      pollMs: 5,
+      pollMax: 2,
+    });
+    setSendTestDeps({ offerProbe: async () => ({ ok: true, detalle: 'viva (fake)' }) });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${ICIMS_URL}` } });
+    const job = await waitForJob((res.json() as { jobId: string }).jobId);
+    assert.equal(job.status, 'done');
+    assert.equal(job.step, 'envio_en_curso');
+    const apps = await query<{ status: string; portal: string; offer_snapshot: { ordenDirecta?: boolean } }>(
+      `SELECT status, portal, offer_snapshot FROM applications`,
+    );
+    assert.equal(apps.length, 1);
+    assert.equal(apps[0].portal, 'icims');
+    assert.equal(apps[0].status, 'approved');
+    assert.equal(apps[0].offer_snapshot.ordenDirecta, true);
+    assert.equal((await query(`SELECT id FROM sends`)).length, 1);
+  });
+
   it('portal sin driver (Workday): queda preparada en Revisión, sin aprobar', async () => {
     setAgentTestDeps({
       getContents: async () => ({

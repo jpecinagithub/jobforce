@@ -12,6 +12,7 @@ export type { ExecutorDeps } from './executor.js';
 export { iniciarWorkerSends, procesarColaUnaVez } from './worker.js';
 export type { WorkerOpts, WorkerHandle } from './worker.js';
 export { PersonioDriver, crearDriver, camposPersonioEstandar } from './driver.js';
+export { IcimsDriver } from './icims-driver.js';
 export { AnomaliaEnvio } from './types.js';
 export type {
   AnomaliaKind,

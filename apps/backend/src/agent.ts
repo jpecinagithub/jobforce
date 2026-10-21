@@ -115,7 +115,7 @@ export function parseAgentCommand(text: string): AgentCommand {
 }
 
 export const AGENT_HELP =
-  'Puedo aplicar por ti a una oferta concreta. Escríbeme «aplica a esta oferta: <url>» (o pega directamente el enlace) y me encargo de todo: compruebo el enlace, sigo la derivación al portal real si el anuncio aplica en otro sitio, genero el CV y la carta, y envío la candidatura (Personio automáticamente; por correo si el anuncio lo pide y Gmail tiene permiso de envío). Si un portal no me deja aplicar solo, te digo el motivo concreto y te dejo todo preparado. Con «estado» te digo cómo va el último encargo.';
+  'Puedo aplicar por ti a una oferta concreta. Escríbeme «aplica a esta oferta: <url>» (o pega directamente el enlace) y me encargo de todo: compruebo el enlace, sigo la derivación al portal real si el anuncio aplica en otro sitio, genero el CV y la carta, y envío la candidatura (Personio e iCIMS automáticamente —en iCIMS creo tu cuenta si hace falta—; por correo si el anuncio lo pide y Gmail tiene permiso de envío). Si un portal no me deja aplicar solo, te digo el motivo concreto y te dejo todo preparado. Con «estado» te digo cómo va el último encargo.';
 
 // ---------------------------------------------------------------------------
 // Mensajes y jobs
@@ -397,20 +397,34 @@ async function processOfferUrl(
       `SELECT status FROM applications WHERE id = $1`,
       [prep.applicationId],
     );
-    await say(
-      `ℹ️ Ya existe una candidatura para esta oferta en estado «${st[0]?.status ?? prep.status}». No duplico: puedes seguirla en Revisión/Histórico.`,
+    const estado = st[0]?.status ?? prep.status;
+    if (estado !== 'ready_for_review') {
+      await say(
+        `ℹ️ Ya existe una candidatura para esta oferta en estado «${estado}». No duplico: puedes seguirla en Revisión/Histórico.`,
+      );
+      await setJobState(jobId, { status: 'done', step: 'ya_existia' });
+      return;
+    }
+    // Preparada pero sin enviar (p. ej. de un encargo anterior que se
+    // detuvo en un portal sin driver): se RETOMA con la orden actual.
+    // Se reclasifica el portal con el detector vigente (puede haber
+    // ganado driver desde entonces, p. ej. iCIMS).
+    const portalAhora = detectarPortal(url);
+    await query(
+      `UPDATE applications SET portal = $2, updated_at = now() WHERE id = $1 AND portal <> $2`,
+      [prep.applicationId, portalAhora],
     );
-    await setJobState(jobId, { status: 'done', step: 'ya_existia' });
-    return;
+    await say('↩️ Retomo la candidatura que ya estaba preparada en Revisión: sigo con el envío.');
+  } else {
+    const docs = await query<{ kind: string }>(
+      `SELECT DISTINCT kind FROM documents WHERE application_id = $1`,
+      [prep.applicationId],
+    );
+    await say(
+      `📄 Documentos generados: ${docs.map((d) => d.kind).join(' + ') || 'CV y carta'}. ` +
+        'Tu orden en este chat cuenta como aprobación expresa: sigo con el envío.',
+    );
   }
-  const docs = await query<{ kind: string }>(
-    `SELECT DISTINCT kind FROM documents WHERE application_id = $1`,
-    [prep.applicationId],
-  );
-  await say(
-    `📄 Documentos generados: ${docs.map((d) => d.kind).join(' + ') || 'CV y carta'}. ` +
-      'Tu orden en este chat cuenta como aprobación expresa: sigo con el envío.',
-  );
 
   // 5) Canal de envío.
   const offerRow = await query<{
@@ -419,8 +433,16 @@ async function processOfferUrl(
   }>(`SELECT application_email, application_notes FROM offers WHERE id = $1`, [offerId]);
   const portal = detectarPortal(url);
 
-  if (portal === 'personio') {
-    // 5a) Personio: aprobación (la orden del chat) + worker.
+  if (portal === 'personio' || portal === 'icims') {
+    // 5a) Portal con driver: aprobación (la orden del chat) + worker.
+    // La orden queda sellada en el snapshot: es la revisión favorable
+    // de Jon para ESTA candidatura (decidirEnvio la reconoce).
+    await query(
+      `UPDATE applications
+          SET offer_snapshot = offer_snapshot || $2::jsonb, updated_at = now()
+        WHERE id = $1`,
+      [prep.applicationId, JSON.stringify({ ordenDirecta: true, ordenDirectaJobId: jobId })],
+    );
     await setJobState(jobId, { step: 'aprobacion_envio' });
     await applyDecision(prep.applicationId, 'approve', undefined, ctx.actorId);
     await auditEvent({
@@ -438,7 +460,11 @@ async function processOfferUrl(
       await setJobState(jobId, { status: 'blocked', step: 'envio_bloqueado' });
       return;
     }
-    await say('🚀 Envío encolado: el trabajador está rellenando la candidatura en Personio…');
+    await say(
+      portal === 'icims'
+        ? '🚀 Envío encolado: el trabajador va a entrar en iCIMS (creando tu cuenta si aún no existe), rellenar la candidatura y enviarla…'
+        : '🚀 Envío encolado: el trabajador está rellenando la candidatura en Personio…',
+    );
 
     // Seguimiento del worker hasta el resultado.
     const pollMs = testDeps.pollMs ?? SEND_POLL_MS;

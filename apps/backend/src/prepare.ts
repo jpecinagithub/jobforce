@@ -52,6 +52,10 @@ import { workspaceBase } from './workspace.js';
 
 const PORTALES: Array<{ patron: string; portal: string; nombre: string }> = [
   { patron: 'personio', portal: 'personio', nombre: 'Personio' },
+  { patron: 'icims.com', portal: 'icims', nombre: 'iCIMS' },
+  // Alias verificado en vivo (2026-10-21): la web de empleo de
+  // Sightsavers aplica sobre iCIMS (careers-sightsavers.icims.com).
+  { patron: 'careers.sightsavers.org', portal: 'icims', nombre: 'iCIMS (Sightsavers)' },
   { patron: 'greenhouse', portal: 'greenhouse', nombre: 'Greenhouse' },
   { patron: 'lever', portal: 'lever', nombre: 'Lever' },
   { patron: 'smartrecruiters', portal: 'smartrecruiters', nombre: 'SmartRecruiters' },

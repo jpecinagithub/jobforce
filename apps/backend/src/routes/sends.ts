@@ -301,6 +301,13 @@ export interface DecisionResultado {
  *     automático, una candidatura en `ready_for_review` (sin aprobación
  *     humana) NUNCA se promueve por debajo del umbral automático.
  */
+/** ¿La candidatura nace de una orden directa de Jon en el chat del Agente?
+ * El agente lo sella en el offer_snapshot al aprobar (`ordenDirecta: true`). */
+export function ordenDirectaDeJon(app: ApplicationRow): boolean {
+  const snap = app.offer_snapshot as { ordenDirecta?: unknown } | null;
+  return !!snap && typeof snap === 'object' && snap.ordenDirecta === true;
+}
+
 export function decidirEnvio(
   app: ApplicationRow,
   politica: PoliticaAutonomia,
@@ -346,6 +353,24 @@ export function decidirEnvio(
     ofertaVigente: checkOk('oferta_vigente'),
   };
   const ev = evaluarEnvio(politica, ctx);
+
+  if (ev.decision === 'requiere_revision' && app.status === 'approved' && ordenDirectaDeJon(app)) {
+    // Orden directa de Jon en el chat del Agente (2026-10-21): él ha
+    // visto la evaluación informativa de ESA oferta y ha ordenado
+    // aplicar expresamente. Su revisión favorable sustituye a la
+    // automática SOLO para los motivos blandos que producen
+    // `requiere_revision` (sin evidencia / encaje desconocido). Los
+    // bloqueos duros (decisión `bloqueado`: parada global, duplicado,
+    // oferta no vigente, empresa excluida, portal no permitido,
+    // límites, presupuesto, incumple) NO se ven afectados.
+    return {
+      decision: 'permitido',
+      motivos: [
+        ...ev.motivos,
+        'orden_directa_de_jon: encargo expreso en el chat del Agente tras ver la evaluación',
+      ],
+    };
+  }
 
   if (ev.decision === 'requiere_revision' && app.status === 'approved') {
     // Decisión expresa de Jon (20-oct-2026): su aprobación explícita basta

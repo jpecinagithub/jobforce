@@ -33,6 +33,7 @@ import {
   AnomaliaEnvio,
   type AperturaResultado,
   type BrowserDriver,
+  type DriverJob,
   type PreparacionResultado,
   type ResultadoDriver,
 } from '../src/sender/types.js';
@@ -489,5 +490,147 @@ describe('ejecutor de envíos', () => {
     assert.ok(r && r.procesado && (r as { estado: string }).estado === 'sent');
     const vacio = await reclamarSiguiente(deps());
     assert.equal(vacio, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// iCIMS: el ejecutor carga el trabajo SIN formConfig de selectores,
+// obtiene la cuenta del portal y pasa los datos al driver.
+// ---------------------------------------------------------------------------
+
+describe('ejecutor de envíos — iCIMS', () => {
+  let app: FastifyInstance;
+  let auth: AuthContext;
+
+  class CapturingDriver implements BrowserDriver {
+    readonly portal = 'icims';
+    job: DriverJob | null = null;
+    async verificarApertura(job: DriverJob): Promise<AperturaResultado> {
+      this.job = job;
+      return { abierta: true, detalle: 'ok (fake icims)' };
+    }
+    async preparar(job: DriverJob): Promise<PreparacionResultado> {
+      this.job = job;
+      return { camposRellenados: 5, uploadsOk: true, capturas: [] };
+    }
+    async enviarYConfirmar(): Promise<ResultadoDriver> {
+      return {
+        confirmado: true,
+        confirmacion: {
+          mensaje: 'Thank you, your application has been submitted (fake).',
+          urlTrasEnvio: 'https://careers-sightsavers.icims.com/ok',
+          referencia: 'ICIMS-1',
+          capturas: [],
+        },
+        capturas: [],
+        evidencia: {},
+      };
+    }
+    async cerrar(): Promise<void> {}
+  }
+
+  async function seedPerfil(): Promise<void> {
+    const v = await query<{ id: string }>(
+      `INSERT INTO profile_versions (status, source) VALUES ('active', 'test') RETURNING id`,
+    );
+    const vid = v[0].id;
+    const facts: Array<[string, string, unknown]> = [
+      ['identity', 'full_name', 'Jon Peciña Iturbe'],
+      ['identity', 'email', 'jpecina@gmail.com'],
+      ['identity', 'linkedin', 'linkedin.com/in/jpecina'],
+      ['identity', 'location', { city: 'Logroño', country: 'España' }],
+      ['identity', 'phone', '+34 600000000'],
+      ['experience', 'experience_summary_claim', { text: 'over 15 years of experience', note: 'literal' }],
+      ['experience', 'exp_x', { start: '2023-11', end: '2026-06', title: 'CFO', company: 'Acme', location: 'Lima' }],
+      ['education', 'edu_x', { start: '1997', end: '2003', degree: 'Ingeniero Industrial', institution: 'UNAV', official: true, issued: 'Pamplona' }],
+      ['skills', 'skills_core', ['IFRS']],
+      ['languages', 'lang_en', { language: 'inglés', level: 'avanzado' }],
+    ];
+    for (const [category, key, value] of facts) {
+      await query(
+        `INSERT INTO profile_facts (profile_version_id, category, key, value, source)
+         VALUES ($1, $2, $3, $4::jsonb, 'test')`,
+        [vid, category, key, JSON.stringify(value)],
+      );
+    }
+  }
+
+  before(async () => {
+    app = await buildTestApp();
+    if (!docBase) docBase = mkdtempSync(join(tmpdir(), 'sender-icims-'));
+  });
+
+  after(async () => {
+    await closeTestApp(app);
+  });
+
+  beforeEach(async () => {
+    await resetDb();
+    resetSendTestDeps();
+    auth = await setupAndLogin(app);
+    await seedPerfil();
+  });
+
+  it('portal icims sin formConfig: cuenta + datos al driver → sent', async () => {
+    // Política automática con icims permitido y cuentas autorizadas.
+    const { defaultReglasAutonomia } = await import('../src/routes/autonomy.js');
+    const reglas = {
+      ...defaultReglasAutonomia(),
+      portalesPermitidos: ['personio', 'icims'],
+      crearCuentasPortales: true,
+    };
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/autonomy/policy',
+      headers: authed(auth),
+      payload: { modoActivo: 'ejecutar_automatico', reglas },
+    });
+    assert.equal(put.statusCode, 201, `PUT policy: ${put.statusCode} ${put.body}`);
+    const authorize = await app.inject({
+      method: 'POST',
+      url: '/api/autonomy/policy/authorize',
+      headers: authed(auth),
+      payload: { autorizadoPor: 'Jon Peciña Iturbe', declaracion: 'Autorizo (test iCIMS).' },
+    });
+    assert.equal(authorize.statusCode, 200);
+
+    const applicationId = await crearCandidatura({
+      portal: 'icims',
+      score: 80,
+      verdict: 'cumple',
+      appStatus: 'approved',
+    });
+    // Sin formConfig: iCIMS rellena por etiquetas, no por selectores.
+    await query(`UPDATE applications SET offer_snapshot = '{}'::jsonb WHERE id = $1`, [applicationId]);
+    const pol = await query<{ version: number }>(
+      `SELECT version FROM autonomy_policies WHERE revoked_at IS NULL ORDER BY version DESC LIMIT 1`,
+    );
+    const send = await query<{ id: string }>(
+      `INSERT INTO sends (application_id, idempotency_key, policy_version, status)
+       VALUES ($1, $2, $3, 'queued') RETURNING id`,
+      [applicationId, randomUUID(), pol[0].version],
+    );
+
+    const driver = new CapturingDriver();
+    const cuentaLlamada: { host?: string; email?: string } = {};
+    const r = await procesarEnvio(send[0].id, {
+      workspaceBase: docBase,
+      driverFactory: () => driver,
+      cuentaPortal: async (host: string, email: string) => {
+        cuentaLlamada.host = host;
+        cuentaLlamada.email = email;
+        return { email, password: 'Pw-generada-9!x' };
+      },
+    });
+    assert.equal(r.procesado, true);
+    assert.equal((r as { estado: string }).estado, 'sent');
+    assert.equal(await estadoApp(applicationId), 'submitted');
+    assert.equal(cuentaLlamada.email, 'jpecina@gmail.com');
+    assert.ok(driver.job, 'el driver recibió el trabajo');
+    assert.equal(driver.job!.portal, 'icims');
+    assert.equal(driver.job!.campos.length, 0);
+    assert.equal(driver.job!.icims?.cuentaPassword, 'Pw-generada-9!x');
+    assert.equal(driver.job!.icims?.nombre, 'Jon');
+    assert.equal(driver.job!.icims?.paisResidencia, 'España');
   });
 });
