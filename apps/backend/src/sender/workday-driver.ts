@@ -366,6 +366,16 @@ export class WorkdayDriver implements BrowserDriver {
     return page.evaluate<string | null>(`${CLICK_TEXTO_JS}(${JSON.stringify(textos.map((t) => t.toLowerCase()))})`);
   }
 
+  /** Espera a que la SPA pinte contenido útil (tras crear la cuenta
+   * Workday recarga la página entera y la captura sale en blanco). */
+  private async esperarContenido(page: PwPage, intentos = 10): Promise<void> {
+    for (let i = 0; i < intentos; i++) {
+      const t = await this.texto(page);
+      if (t.length > 300) return;
+      await page.waitForTimeout(2000);
+    }
+  }
+
   /** Abre el panel de aplicación y elige «Autofill with Resume». */
   private async abrirAsistente(page: PwPage, job: DriverJob): Promise<void> {
     await page.goto(job.applyUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -511,13 +521,35 @@ export class WorkdayDriver implements BrowserDriver {
     }
     const paso = await page.evaluate<string>(PASO_JS).catch(() => '');
     if (/create account|sign in/i.test(paso) || (await page.$('input[type="password"]'))) {
-      const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
-      await this.capturar(page, job, 'workday-cuenta-error.png');
-      throw new AnomaliaEnvio(
-        'formulario_cambiado',
-        `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
-      );
+      // La cuenta puede YA existir (creada en una pasada anterior):
+      // entrar con las mismas credenciales antes de rendirse.
+      await this.clickTexto(page, ['sign in']).catch(() => null);
+      await page.waitForTimeout(2500);
+      await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
+      await page.fill('input[type="password"]', datos.cuentaPassword).catch(() => undefined);
+      try {
+        const loc = page.getByRole('button', { name: /sign in/i }).first();
+        if (await loc.isVisible()) await loc.click();
+      } catch {
+        await this.clickTexto(page, ['sign in']).catch(() => null);
+      }
+      for (let i = 0; i < 10; i++) {
+        await page.waitForTimeout(2500);
+        const p2 = await page.evaluate<string>(PASO_JS).catch(() => '');
+        if (p2 && !/create account|sign in/i.test(p2)) break;
+        if (!(await page.$('input[type="password"]'))) break;
+      }
+      const paso2 = await page.evaluate<string>(PASO_JS).catch(() => '');
+      if (/create account|sign in/i.test(paso2) || (await page.$('input[type="password"]'))) {
+        const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
+        await this.capturar(page, job, 'workday-cuenta-error.png');
+        throw new AnomaliaEnvio(
+          'formulario_cambiado',
+          `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
+        );
+      }
     }
+    await this.esperarContenido(page);
   }
 
   // --------------------------------------------------------------------
@@ -735,6 +767,7 @@ export class WorkdayDriver implements BrowserDriver {
     }
     let rellenadosTotal = 0;
     for (let i = 0; i < 10; i++) {
+      await this.esperarContenido(page, 6);
       if (await this.captchaVisible(page)) {
         await this.capturar(page, job, 'workday-captcha.png');
         throw new AnomaliaEnvio('captcha_mfa', 'Workday muestra un captcha visible en el asistente');
