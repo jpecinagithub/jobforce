@@ -70,18 +70,25 @@ export interface DriverJob {
   shotsDir: string;
   /** Nombre del botón de envío (fuente de RegExp, p. ej. "submit application"). */
   submitButtonName: string;
-  /** Solo iCIMS: datos del candidato y de la cuenta del portal. */
-  icims?: {
-    nombre: string;
-    apellidos: string;
-    email: string;
-    telefono: string;
-    ubicacion: string;
-    paisResidencia: string;
-    linkedin: string;
-    cuentaEmail: string;
-    cuentaPassword: string;
-  };
+  /** iCIMS: datos del candidato y de la cuenta del portal. */
+  icims?: DatosEtiquetas;
+  /** Drivers por etiquetas (Workable): mismos datos del candidato. */
+  etiquetas?: DatosEtiquetas;
+}
+
+/** Datos del candidato para drivers que rellenan POR ETIQUETAS. */
+export interface DatosEtiquetas {
+  nombre: string;
+  apellidos: string;
+  email: string;
+  telefono: string;
+  ubicacion: string;
+  paisResidencia: string;
+  linkedin: string;
+  /** Hecho `salary_expectation` del perfil; null si Jon no lo dio. */
+  salarioEsperado: string | null;
+  cuentaEmail: string;
+  cuentaPassword: string;
 }
 
 export interface AperturaResultado {

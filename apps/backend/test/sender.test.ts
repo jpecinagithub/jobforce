@@ -634,3 +634,130 @@ describe('ejecutor de envíos — iCIMS', () => {
     assert.equal(driver.job!.icims?.paisResidencia, 'España');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Workable: el ejecutor carga el trabajo por etiquetas (sin formConfig
+// ni cuenta de portal) y el driver recibe los datos del candidato.
+// ---------------------------------------------------------------------------
+
+describe('ejecutor de envíos — Workable', () => {
+  let app: FastifyInstance;
+  let auth: AuthContext;
+
+  class CapturingDriverW implements BrowserDriver {
+    readonly portal = 'workable';
+    job: DriverJob | null = null;
+    async verificarApertura(job: DriverJob): Promise<AperturaResultado> {
+      this.job = job;
+      return { abierta: true, detalle: 'ok (fake workable)' };
+    }
+    async preparar(job: DriverJob): Promise<PreparacionResultado> {
+      this.job = job;
+      return { camposRellenados: 4, uploadsOk: true, capturas: [] };
+    }
+    async enviarYConfirmar(): Promise<ResultadoDriver> {
+      return {
+        confirmado: true,
+        confirmacion: {
+          mensaje: 'Your application has been sent (fake).',
+          urlTrasEnvio: 'https://apply.workable.com/ok',
+          referencia: null,
+          capturas: [],
+        },
+        capturas: [],
+        evidencia: {},
+      };
+    }
+    async cerrar(): Promise<void> {}
+  }
+
+  before(async () => {
+    app = await buildTestApp();
+    if (!docBase) docBase = mkdtempSync(join(tmpdir(), 'sender-workable-'));
+  });
+
+  after(async () => {
+    await closeTestApp(app);
+  });
+
+  beforeEach(async () => {
+    await resetDb();
+    resetSendTestDeps();
+    auth = await setupAndLogin(app);
+    // Perfil activo mínimo (mismo sembrado que el bloque iCIMS).
+    const v = await query<{ id: string }>(
+      `INSERT INTO profile_versions (status, source) VALUES ('active', 'test') RETURNING id`,
+    );
+    const facts: Array<[string, string, unknown]> = [
+      ['identity', 'full_name', 'Jon Peciña Iturbe'],
+      ['identity', 'email', 'jpecina@gmail.com'],
+      ['identity', 'linkedin', 'linkedin.com/in/jpecina'],
+      ['identity', 'location', { city: 'Logroño', country: 'España' }],
+      ['identity', 'phone', '+34 600000000'],
+      ['compensation', 'salary_expectation', { text: 'USD 70,000 per year' }],
+      ['experience', 'experience_summary_claim', { text: 'over 15 years of experience', note: 'literal' }],
+      ['experience', 'exp_x', { start: '2023-11', end: '2026-06', title: 'CFO', company: 'Acme', location: 'Lima' }],
+      ['education', 'edu_x', { start: '1997', end: '2003', degree: 'Ingeniero Industrial', institution: 'UNAV', official: true, issued: 'Pamplona' }],
+      ['skills', 'skills_core', ['IFRS']],
+      ['languages', 'lang_en', { language: 'inglés', level: 'avanzado' }],
+    ];
+    for (const [category, key, value] of facts) {
+      await query(
+        `INSERT INTO profile_facts (profile_version_id, category, key, value, source)
+         VALUES ($1, $2, $3, $4::jsonb, 'test')`,
+        [v[0].id, category, key, JSON.stringify(value)],
+      );
+    }
+  });
+
+  it('portal workable sin formConfig ni cuenta: datos por etiquetas → sent', async () => {
+    const { defaultReglasAutonomia } = await import('../src/routes/autonomy.js');
+    const reglas = {
+      ...defaultReglasAutonomia(),
+      portalesPermitidos: ['personio', 'workable'],
+      crearCuentasPortales: true,
+    };
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/autonomy/policy',
+      headers: authed(auth),
+      payload: { modoActivo: 'ejecutar_automatico', reglas },
+    });
+    assert.equal(put.statusCode, 201, `PUT policy: ${put.statusCode} ${put.body}`);
+    const authorize = await app.inject({
+      method: 'POST',
+      url: '/api/autonomy/policy/authorize',
+      headers: authed(auth),
+      payload: { autorizadoPor: 'Jon Peciña Iturbe', declaracion: 'Autorizo (test Workable).' },
+    });
+    assert.equal(authorize.statusCode, 200);
+
+    const applicationId = await crearCandidatura({
+      portal: 'workable',
+      score: 82,
+      verdict: 'cumple',
+      appStatus: 'approved',
+    });
+    await query(`UPDATE applications SET offer_snapshot = '{}'::jsonb WHERE id = $1`, [applicationId]);
+    const pol = await query<{ version: number }>(
+      `SELECT version FROM autonomy_policies WHERE revoked_at IS NULL ORDER BY version DESC LIMIT 1`,
+    );
+    const send = await query<{ id: string }>(
+      `INSERT INTO sends (application_id, idempotency_key, policy_version, status)
+       VALUES ($1, $2, $3, 'queued') RETURNING id`,
+      [applicationId, randomUUID(), pol[0].version],
+    );
+    const driver = new CapturingDriverW();
+    const r = await procesarEnvio(send[0].id, {
+      workspaceBase: docBase,
+      driverFactory: () => driver,
+    });
+    assert.equal(r.procesado, true);
+    assert.equal((r as { estado: string }).estado, 'sent');
+    assert.ok(driver.job);
+    assert.equal(driver.job!.portal, 'workable');
+    assert.equal(driver.job!.etiquetas?.nombre, 'Jon');
+    assert.equal(driver.job!.etiquetas?.salarioEsperado, 'USD 70,000 per year');
+    assert.equal(driver.job!.etiquetas?.cuentaPassword, '');
+  });
+});

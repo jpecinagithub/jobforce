@@ -49,6 +49,7 @@ import { hostCuentaIcims, obtenerOCrearCuentaPortal } from '../portal-accounts.j
 import { construirPerfilCandidato } from '../prepare.js';
 import { crearDriver } from './driver.js';
 import { IcimsDriver } from './icims-driver.js';
+import { WorkableDriver } from './workable-driver.js';
 import { presupuestoDisponible, registrarTiempoNavegador } from '@jobforce/costs';
 import {
   AnomaliaEnvio,
@@ -207,13 +208,14 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
   const shotsDir = join(base, 'jobforce', 'sends', send.id, 'capturas');
   mkdirSync(shotsDir, { recursive: true });
 
-  if (portal === 'icims') {
-    // iCIMS no usa selectores preconfigurados: el driver rellena el
-    // asistente por etiquetas con los datos del perfil y la cuenta
-    // del portal (creada cifrada si no existía).
+  if (portal === 'icims' || portal === 'workable') {
+    // iCIMS y Workable no usan selectores preconfigurados: el driver
+    // rellena el formulario por etiquetas con los datos del perfil
+    // (iCIMS además con la cuenta del portal, creada cifrada si no
+    // existía; Workable no usa cuenta).
     const applyUrl = app.offer_url;
     if (!applyUrl) {
-      throw new AnomaliaEnvio('datos_ausentes', 'sin URL de la oferta para iCIMS', {
+      throw new AnomaliaEnvio('datos_ausentes', `sin URL de la oferta para ${portal}`, {
         contexto: { applicationId: app.id },
       });
     }
@@ -234,24 +236,37 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
     }));
     const candidato = construirPerfilCandidato(facts);
     if (!candidato) {
-      throw new AnomaliaEnvio('datos_ausentes', 'sin perfil activo completo para rellenar iCIMS', {
+      throw new AnomaliaEnvio('datos_ausentes', `sin perfil activo completo para rellenar ${portal}`, {
         contexto: { applicationId: app.id },
       });
     }
+    // Sueldo esperado: solo si Jon lo dejó como hecho en su perfil.
+    const salarioFact = factRows.find((f) => f.key === 'salary_expectation');
+    const salarioEsperado =
+      typeof salarioFact?.value === 'string'
+        ? salarioFact.value
+        : salarioFact?.value &&
+            typeof salarioFact.value === 'object' &&
+            typeof (salarioFact.value as { text?: unknown }).text === 'string'
+          ? ((salarioFact.value as { text: string }).text as string)
+          : null;
     let host = '';
     try {
       host = new URL(applyUrl).hostname;
     } catch {
       throw new AnomaliaEnvio('datos_ausentes', `URL de oferta inválida: ${applyUrl}`);
     }
-    // La cuenta se guarda contra el host del portal iCIMS (la web
-    // pública puede ser un alias de la organización).
+    // La cuenta (solo iCIMS) se guarda contra el host del portal (la
+    // web pública puede ser un alias de la organización).
     const cuentaHost = hostCuentaIcims(host);
-    const cuenta = deps.cuentaPortal
-      ? await deps.cuentaPortal(cuentaHost, candidato.identity.email)
-      : deps.config
-        ? await obtenerOCrearCuentaPortal(deps.config, cuentaHost, candidato.identity.email, deps.actorId ?? null)
-        : null;
+    const cuenta =
+      portal === 'workable'
+        ? { email: candidato.identity.email, password: '' }
+        : deps.cuentaPortal
+          ? await deps.cuentaPortal(cuentaHost, candidato.identity.email)
+          : deps.config
+            ? await obtenerOCrearCuentaPortal(deps.config, cuentaHost, candidato.identity.email, deps.actorId ?? null)
+            : null;
     if (!cuenta) {
       throw new AnomaliaEnvio('datos_ausentes', 'sin config para gestionar la cuenta del portal', {
         contexto: { applicationId: app.id },
@@ -282,10 +297,12 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
           ? ubicacion.slice(ubicacion.lastIndexOf(',') + 1).trim()
           : ubicacion,
         linkedin: candidato.identity.linkedIn ?? '',
+        salarioEsperado,
         cuentaEmail: cuenta.email,
         cuentaPassword: cuenta.password,
       },
     };
+    job.etiquetas = job.icims;
     return { send, app, job };
   }
 
@@ -550,7 +567,12 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
     try {
       const factory =
         deps.driverFactory ??
-        ((j: DriverJob) => (j.portal === 'icims' ? new IcimsDriver() : crearDriver(j.portal)));
+        ((j: DriverJob) =>
+          j.portal === 'icims'
+            ? new IcimsDriver()
+            : j.portal === 'workable'
+              ? new WorkableDriver()
+              : crearDriver(j.portal));
       driver = factory(job);
     } catch (e) {
       if (e instanceof AnomaliaEnvio) {

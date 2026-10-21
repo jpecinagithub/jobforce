@@ -324,6 +324,34 @@ describe('agente conversacional', () => {
     assert.equal((await query(`SELECT id FROM sends`)).length, 1);
   });
 
+  it('flujo Workable: aprueba con orden directa y encola el envío', async () => {
+    const WORKABLE_URL = 'https://apply.workable.com/euromonitor/j/2D69E85A31';
+    setAgentTestDeps({
+      getContents: async () => ({
+        id: 'exa-test',
+        title: 'Accounting Manager - Euromonitor',
+        url: WORKABLE_URL,
+        text: EXA_TEXT,
+        highlights: ['Accounting Manager — IFRS, English, Mexico City.'],
+      }),
+      checkUrl: async () => ({ status: 'alive', via: 'http' }),
+      pollMs: 5,
+      pollMax: 2,
+    });
+    setSendTestDeps({ offerProbe: async () => ({ ok: true, detalle: 'viva (fake)' }) });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${WORKABLE_URL}` } });
+    const job = await waitForJob((res.json() as { jobId: string }).jobId);
+    assert.equal(job.status, 'done');
+    assert.equal(job.step, 'envio_en_curso');
+    const apps = await query<{ portal: string; offer_snapshot: { ordenDirecta?: boolean } }>(
+      `SELECT portal, offer_snapshot FROM applications`,
+    );
+    assert.equal(apps.length, 1);
+    assert.equal(apps[0].portal, 'workable');
+    assert.equal(apps[0].offer_snapshot.ordenDirecta, true);
+    assert.equal((await query(`SELECT id FROM sends`)).length, 1);
+  });
+
   it('portal sin driver (Workday): queda preparada en Revisión, sin aprobar', async () => {
     setAgentTestDeps({
       getContents: async () => ({
