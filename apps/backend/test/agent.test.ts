@@ -113,9 +113,10 @@ describe('agente conversacional', () => {
     auth = await setupAndLogin(app);
     // Política autorizada (el modo sembrado, preparar_para_revision, ya
     // encadena el envío tras la aprobación).
+    const admin = await query<{ id: string }>(`SELECT id FROM admin_users LIMIT 1`);
     await query(
       `UPDATE autonomy_policies SET authorized_by = $1, authorized_at = now()`,
-      [auth.userId],
+      [admin[0].id],
     );
     await seedPerfilActivo();
   });
@@ -146,11 +147,7 @@ describe('agente conversacional', () => {
     });
     setSendTestDeps({ offerProbe: async () => ({ ok: true, detalle: 'viva (fake)' }) });
 
-    const res = await authed(app, auth, {
-      method: 'POST',
-      url: '/api/agent/messages',
-      payload: { text: `aplica a esta oferta: ${PERSONIO_URL}` },
-    });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${PERSONIO_URL}` } });
     assert.equal(res.statusCode, 200);
     const body = res.json() as { accepted: boolean; jobId: string };
     assert.equal(body.accepted, true);
@@ -184,11 +181,7 @@ describe('agente conversacional', () => {
       },
       checkUrl: async () => ({ status: 'broken', via: 'workday_api' }),
     });
-    const res = await authed(app, auth, {
-      method: 'POST',
-      url: '/api/agent/messages',
-      payload: { text: `aplica a ${WORKDAY_URL}` },
-    });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a ${WORKDAY_URL}` } });
     const body = res.json() as { jobId: string };
     const job = await waitForJob(body.jobId);
     assert.equal(job.status, 'blocked');
@@ -208,11 +201,7 @@ describe('agente conversacional', () => {
       }),
       checkUrl: async () => ({ status: 'alive', via: 'workday_api' }),
     });
-    const res = await authed(app, auth, {
-      method: 'POST',
-      url: '/api/agent/messages',
-      payload: { text: `aplica a esta oferta: ${WORKDAY_URL}` },
-    });
+    const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${WORKDAY_URL}` } });
     const body = res.json() as { jobId: string };
     const job = await waitForJob(body.jobId);
     assert.equal(job.status, 'done');
