@@ -194,7 +194,7 @@ export default async function CampaignDetailPage({
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <Link href={`/campanas/${campaign.id}/ofertas/${o.id}`}>Ver</Link>
-                    {o.application?.status === 'withdrawn' && (
+                    {o.application && (
                       <DeleteOfferButton
                         campaignId={campaign.id}
                         offerId={o.id}

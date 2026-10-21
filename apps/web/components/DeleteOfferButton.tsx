@@ -7,10 +7,10 @@ import ConfirmModal, { type Confirmacion } from '@/components/ConfirmModal';
 import { parseApiError } from '@/lib/campaigns';
 
 /**
- * Botón «Eliminar» de una oferta con la candidatura RETIRADA (petición
- * de Jon, 21-oct-2026): aparece junto a «Ver» en la tabla de ofertas
- * de la campaña solo cuando la candidatura está retirada. El backend
- * exige lo mismo (409 si no está retirada o si hubo envíos reales).
+ * Icono de papelera para eliminar una oferta y su candidatura
+ * (petición de Jon, 21-oct-2026): aparece junto a «Ver» en la tabla de
+ * ofertas para CUALQUIER candidatura, sin texto, solo el icono típico
+ * de delete. El backend solo protege lo ya enviado de verdad (409).
  * Borrado definitivo: oferta, evaluación, candidatura y documentos.
  */
 export default function DeleteOfferButton({
@@ -40,11 +40,9 @@ export default function DeleteOfferButton({
         const clone = res.clone();
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         setError(
-          body?.error === 'candidatura_no_retirada'
-            ? 'Solo se puede eliminar una oferta con la candidatura retirada.'
-            : body?.error === 'oferta_con_envios_reales'
-              ? 'Esta oferta tiene envíos reales y no se borra: es tu historial.'
-              : await parseApiError(clone),
+          body?.error === 'oferta_con_envios_reales'
+            ? 'Esta candidatura ya se envió de verdad y no se borra: es tu historial.'
+            : await parseApiError(clone),
         );
         return;
       }
@@ -62,7 +60,9 @@ export default function DeleteOfferButton({
         type="button"
         className="btn btn-ghost"
         disabled={borrando}
-        style={{ marginLeft: '0.6rem' }}
+        title="Eliminar"
+        aria-label="Eliminar"
+        style={{ marginLeft: '0.6rem', padding: '0.25rem 0.4rem', lineHeight: 0 }}
         onClick={() =>
           setConfirmacion({
             titulo: 'Eliminar oferta',
@@ -70,7 +70,7 @@ export default function DeleteOfferButton({
               <>
                 <p>
                   Vas a eliminar <strong>{offerTitle}</strong> con su evaluación,
-                  su candidatura retirada y sus documentos.
+                  su candidatura y sus documentos.
                 </p>
                 <p className="muted">No se puede deshacer.</p>
               </>
@@ -80,7 +80,27 @@ export default function DeleteOfferButton({
           })
         }
       >
-        {borrando ? 'Eliminando…' : 'Eliminar'}
+        {borrando ? (
+          '…'
+        ) : (
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M3 6h18" />
+            <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+          </svg>
+        )}
       </button>
       {error && (
         <span className="error" role="alert" style={{ display: 'block', marginTop: '0.3rem' }}>

@@ -1045,12 +1045,11 @@ export async function registerCampaignRoutes(
   });
 
   // DELETE /api/campaigns/:id/offers/:offerId — borrado definitivo de
-  // una oferta cuya candidatura Jon ha RETIRADO (petición suya,
-  // 21-oct-2026: botón «Eliminar» junto a «Ver» en la tabla de ofertas
-  // cuando la candidatura está retirada). Guardas: si existe alguna
-  // candidatura no retirada → 409; si hubo envíos reales o inciertos
-  // → 409 (es historial real y no se borra). El libro de costes se
-  // desvincula, no se borra (el gasto ocurrió).
+  // una oferta y su candidatura (petición de Jon, 21-oct-2026: icono de
+  // papelera junto a «Ver», para CUALQUIER candidatura, a su gusto).
+  // Única guarda: si hubo envíos reales o inciertos → 409 (es su
+  // historial real y no se borra). El libro de costes se desvincula,
+  // no se borra (el gasto ocurrió).
   app.delete('/api/campaigns/:id/offers/:offerId', mutating, async (req, reply) => {
     const { id, offerId } = req.params as { id: string; offerId: string };
     if (!checkCampaignId(id) || !checkCampaignId(offerId)) {
@@ -1067,9 +1066,6 @@ export async function registerCampaignRoutes(
       `SELECT id, status FROM applications WHERE offer_id = $1`,
       [offerId],
     );
-    if (candidaturas.some((a) => a.status !== 'withdrawn')) {
-      return reply.code(409).send({ error: 'candidatura_no_retirada' });
-    }
     if (candidaturas.length > 0) {
       const envios = await query<{ count: string }>(
         `SELECT COUNT(*) AS count FROM sends

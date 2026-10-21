@@ -654,7 +654,35 @@ describe('campañas sin clave de Exa', () => {
     assert.equal((await query('SELECT id FROM evaluations WHERE offer_id = $1', [oferta[0].id])).length, 0);
   });
 
-  it('DELETE oferta con candidatura NO retirada → 409 y no borra', async () => {
+  it('DELETE oferta con candidatura enviada de verdad → 409 y no borra', async () => {
+    const id = await createCampaign(app, auth);
+    const oferta = await query<{ id: string }>(
+      `INSERT INTO offers (campaign_id, canonical_url, url, title, company)
+       VALUES ($1, 'https://example.com/5', 'https://example.com/5', 'CFO', 'Acme')
+       RETURNING id`,
+      [id],
+    );
+    const aplicacion = await query<{ id: string }>(
+      `INSERT INTO applications (campaign_id, offer_id, status)
+       VALUES ($1, $2, 'submitted') RETURNING id`,
+      [id, oferta[0].id],
+    );
+    await query(
+      `INSERT INTO sends (application_id, idempotency_key, policy_version, status)
+       VALUES ($1, 'clave-test-borrado', 1, 'sent')`,
+      [aplicacion[0].id],
+    );
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/campaigns/${id}/offers/${oferta[0].id}`,
+      headers: authed(auth),
+    });
+    assert.equal(res.statusCode, 409);
+    assert.deepEqual(res.json(), { error: 'oferta_con_envios_reales' });
+    assert.equal((await query('SELECT id FROM offers WHERE id = $1', [oferta[0].id])).length, 1);
+  });
+
+  it('DELETE oferta con candidatura en revisión (no retirada): borra sin problema', async () => {
     const id = await createCampaign(app, auth);
     const oferta = await query<{ id: string }>(
       `INSERT INTO offers (campaign_id, canonical_url, url, title, company)
@@ -672,9 +700,9 @@ describe('campañas sin clave de Exa', () => {
       url: `/api/campaigns/${id}/offers/${oferta[0].id}`,
       headers: authed(auth),
     });
-    assert.equal(res.statusCode, 409);
-    assert.deepEqual(res.json(), { error: 'candidatura_no_retirada' });
-    assert.equal((await query('SELECT id FROM offers WHERE id = $1', [oferta[0].id])).length, 1);
+    assert.equal(res.statusCode, 200, res.body);
+    assert.deepEqual(res.json(), { ok: true });
+    assert.equal((await query('SELECT id FROM offers WHERE id = $1', [oferta[0].id])).length, 0);
   });
 
   it('DELETE /api/campaigns/:id inexistente → 404', async () => {
