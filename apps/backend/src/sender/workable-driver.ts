@@ -584,11 +584,13 @@ export class WorkableDriver implements BrowserDriver {
         `no se encontró el botón «Submit application» en Workable (URL: ${page.url()})`,
       );
     }
-    // Sondeo: éxito, o el muro de verificación humana (Turnstile de
-    // Cloudflare aparece junto al botón y deja el envío en
-    // «Submitting…» sin completar: NO es un envío dudoso, es una
-    // atestación que debe hacer Jon).
-    for (let espera = 0; espera < 8; espera++) {
+    // Sondeo: éxito, o el muro de verificación humana. OJO: Workable
+    // inyecta el widget de Turnstile SOLO tras pulsar Enviar (en el
+    // formulario inicial no existe), así que el clic de atestación
+    // autorizado por Jon se da AQUÍ, cuando el widget aparece, una
+    // sola vez; si Cloudflare escala a desafío visual, se para.
+    let turnstileIntentado = false;
+    for (let espera = 0; espera < 10; espera++) {
       await page.waitForTimeout(3000);
       const textoSon = await page.evaluate<string>(TEXTO_JS).catch(() => '');
       if (SUCCESS_RE.test(textoSon) || /apply\/confirmation|thank/i.test(page.url())) {
@@ -605,11 +607,34 @@ export class WorkableDriver implements BrowserDriver {
           evidencia: { portal: 'workable' },
         };
       }
+      const frameTs = this.frameTurnstile(page);
+      if (frameTs && !turnstileIntentado) {
+        turnstileIntentado = true;
+        await frameTs
+          .click('body', { position: { x: 24, y: 28 }, timeout: 8000 })
+          .catch(() => undefined);
+        continue;
+      }
+      if (frameTs && turnstileIntentado) {
+        const alto = await frameTs
+          .evaluate<number>(
+            `(function () { return document.documentElement ? document.documentElement.scrollHeight : 0; })()`,
+          )
+          .catch(() => 0);
+        if (alto > 260) {
+          capturas.push(await this.capturar(page, job, 'workable-tras-envio.png'));
+          throw new AnomaliaEnvio(
+            'captcha_mfa',
+            'Cloudflare Turnstile escaló a desafío visual tras el clic de atestación: ese paso queda para que lo completes tú (la candidatura está rellenada, sin enviar)',
+            { trasClick: true },
+          );
+        }
+      }
       if (await this.captchaVisible(page)) {
         capturas.push(await this.capturar(page, job, 'workable-tras-envio.png'));
         throw new AnomaliaEnvio(
           'captcha_mfa',
-          'Workable exige verificar que eres humano (Cloudflare Turnstile) para completar el envío: la candidatura quedó rellenada sin enviar',
+          'captcha con desafío visible tras pulsar Enviar en Workable: el envío puede no haberse completado',
           { trasClick: true },
         );
       }
