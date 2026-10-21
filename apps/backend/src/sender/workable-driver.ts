@@ -438,34 +438,36 @@ export class WorkableDriver implements BrowserDriver {
           // ni siquiera superan la accionabilidad, y sin marcar el
           // formulario rechaza el envío: «Please select one of these
           // options»). Se verifica el checked tras una espera breve.
-          const intentarMarcar = async (sel: string): Promise<boolean> => {
-            const clic = await page
-              .evaluate<boolean>(`(function () {
-                var el = document.querySelector('${sel}');
-                if (!el) return false;
-                el.click();
-                return true;
-              })()`)
-              .catch(() => false);
-            if (!clic) return false;
-            await page.waitForTimeout(600);
-            return page
-              .evaluate<boolean>(
-                `(function () { var el = document.querySelector('${sel}'); return !!el && el.checked === true; })()`,
-              )
-              .catch(() => false);
-          };
-          let marcado = await intentarMarcar(elegida.sel);
-          if (!marcado) {
-            // El autofill puede aterrizar tarde y re-renderizar otra
-            // vez: re-descubrir el grupo y reintentar una sola vez.
-            await page.waitForTimeout(1800);
-            const frescos = await page.evaluate<CampoW[]>(DESCUBRIR_JS);
-            const fresca = frescos.find(
-              (o) =>
-                o.tipo === 'radio' && o.name === elegida.name && objetivo.test(o.etiqueta.trim()),
-            );
-            if (fresca) marcado = await intentarMarcar(fresca.sel);
+          // Workable regenera los ids de los radios en CADA render de
+          // React y el checked vive en el nodo nuevo tras el clic: la
+          // identidad estable es el NAME del grupo (+ la etiqueta o el
+          // value de la opción). Localizar, clicar y verificar se hace
+          // siempre por name contra el DOM vivo, nunca por id.
+          const nombreGrupo = elegida.name.replace(/["\\]/g, '');
+          const patronTxt = enZonaDerecho ? '/^(yes|sí|si|true)$/i' : '/^(no|false)$/i';
+          const marcarEnPagina = `(function () {
+            var inputs = document.querySelectorAll('input[type="radio"][name="${nombreGrupo}"]');
+            var patron = ${patronTxt};
+            for (var i = 0; i < inputs.length; i++) {
+              var el = inputs[i];
+              var lab = el.closest('label');
+              var txt = lab ? (lab.textContent || '').trim() : '';
+              if (patron.test(txt) || patron.test(el.value || '')) { el.click(); return txt || el.value; }
+            }
+            return null;
+          })()`;
+          const leerMarcada = `(function () {
+            var c = document.querySelector('input[type="radio"][name="${nombreGrupo}"]:checked');
+            if (!c) return null;
+            var lab = c.closest('label');
+            return lab ? (lab.textContent || '').trim() : (c.value || '');
+          })()`;
+          let marcado = false;
+          for (let intento = 0; intento < 3 && !marcado; intento++) {
+            await page.evaluate<string | null>(marcarEnPagina).catch(() => null);
+            await page.waitForTimeout(700);
+            const actual = await page.evaluate<string | null>(leerMarcada).catch(() => null);
+            marcado = actual !== null && objetivo.test(actual.trim());
           }
           if (!marcado) {
             throw new AnomaliaEnvio(
