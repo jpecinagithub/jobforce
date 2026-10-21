@@ -8,6 +8,7 @@
  * Uso: docker cp al contenedor del backend y `node /tmp/reevaluate-pool.mjs`.
  */
 import { evaluateOffer } from '/app/packages/eval/dist/index.js';
+import { fetchOfferText } from '/app/packages/search/dist/index.js';
 import { query, closePool } from '/app/packages/database/dist/index.js';
 
 const versions = await query(
@@ -33,7 +34,13 @@ for (const c of campaigns) {
   const prev = new Map(previas.map((p) => [p.offer_id, p.mandatory_verdict]));
   for (const o of offers) {
     total++;
-    const texto = o.texto && o.texto.trim().length > 0 ? o.texto : undefined;
+    // Como en la ingesta: manda el texto de Exa; si no lo hay (o es muy
+    // corto), el texto descargado de la página. Sin esto, las ofertas
+    // que Exa trajo sin texto pierden el cuerpo que las evaluó.
+    let texto = o.texto && o.texto.trim().length >= 200 ? o.texto : undefined;
+    if (!texto) {
+      texto = (await fetchOfferText(o.url)) ?? o.texto ?? undefined;
+    }
     const ev = evaluateOffer(
       {
         title: o.title ?? '',
