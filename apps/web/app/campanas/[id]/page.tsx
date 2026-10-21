@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { apiGet } from '@/lib/api';
 import type { Campaign } from '@jobforce/domain';
 import CriteriaEditor from '@/components/CriteriaEditor';
+import DeleteOfferButton from '@/components/DeleteOfferButton';
 import SearchLauncher from '@/components/SearchLauncher';
 import ReportViewer from '@/components/ReportViewer';
 import {
@@ -191,8 +192,15 @@ export default async function CampaignDetailPage({
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     <Link href={`/campanas/${campaign.id}/ofertas/${o.id}`}>Ver</Link>
+                    {o.application?.status === 'withdrawn' && (
+                      <DeleteOfferButton
+                        campaignId={campaign.id}
+                        offerId={o.id}
+                        offerTitle={o.title || o.url || 'esta oferta'}
+                      />
+                    )}
                   </td>
                 </tr>
               );

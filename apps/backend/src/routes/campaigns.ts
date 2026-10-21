@@ -1044,6 +1044,83 @@ export async function registerCampaignRoutes(
     };
   });
 
+  // DELETE /api/campaigns/:id/offers/:offerId — borrado definitivo de
+  // una oferta cuya candidatura Jon ha RETIRADO (petición suya,
+  // 21-oct-2026: botón «Eliminar» junto a «Ver» en la tabla de ofertas
+  // cuando la candidatura está retirada). Guardas: si existe alguna
+  // candidatura no retirada → 409; si hubo envíos reales o inciertos
+  // → 409 (es historial real y no se borra). El libro de costes se
+  // desvincula, no se borra (el gasto ocurrió).
+  app.delete('/api/campaigns/:id/offers/:offerId', mutating, async (req, reply) => {
+    const { id, offerId } = req.params as { id: string; offerId: string };
+    if (!checkCampaignId(id) || !checkCampaignId(offerId)) {
+      return reply.code(400).send({ error: 'campana_invalida' });
+    }
+    const offerRows = await query<{ id: string; title: string | null }>(
+      `SELECT id, title FROM offers WHERE id = $1 AND campaign_id = $2`,
+      [offerId, id],
+    );
+    if (offerRows.length === 0) {
+      return reply.code(404).send({ error: 'oferta_no_encontrada' });
+    }
+    const candidaturas = await query<{ id: string; status: string }>(
+      `SELECT id, status FROM applications WHERE offer_id = $1`,
+      [offerId],
+    );
+    if (candidaturas.some((a) => a.status !== 'withdrawn')) {
+      return reply.code(409).send({ error: 'candidatura_no_retirada' });
+    }
+    if (candidaturas.length > 0) {
+      const envios = await query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM sends
+          WHERE application_id IN (SELECT id FROM applications WHERE offer_id = $1)
+            AND status IN ('sent', 'uncertain', 'sending')`,
+        [offerId],
+      );
+      if (Number(envios[0].count) > 0) {
+        return reply.code(409).send({ error: 'oferta_con_envios_reales' });
+      }
+    }
+    await withTransaction(async (client) => {
+      await client.query(`UPDATE cost_events SET offer_id = NULL WHERE offer_id = $1`, [offerId]);
+      await client.query(
+        `UPDATE cost_events SET application_id = NULL
+          WHERE application_id IN (SELECT id FROM applications WHERE offer_id = $1)`,
+        [offerId],
+      );
+      await client.query(
+        `UPDATE gmail_messages SET application_id = NULL
+          WHERE application_id IN (SELECT id FROM applications WHERE offer_id = $1)`,
+        [offerId],
+      );
+      await client.query(
+        `UPDATE interventions SET application_id = NULL
+          WHERE application_id IN (SELECT id FROM applications WHERE offer_id = $1)`,
+        [offerId],
+      );
+      await client.query(
+        `DELETE FROM sends WHERE application_id IN (SELECT id FROM applications WHERE offer_id = $1)`,
+        [offerId],
+      );
+      await client.query(
+        `DELETE FROM documents WHERE application_id IN (SELECT id FROM applications WHERE offer_id = $1)`,
+        [offerId],
+      );
+      await client.query(`DELETE FROM applications WHERE offer_id = $1`, [offerId]);
+      await client.query(`DELETE FROM evaluations WHERE offer_id = $1`, [offerId]);
+      await client.query(`DELETE FROM etiquetas_ofertas WHERE offer_id = $1`, [offerId]);
+      await client.query(`DELETE FROM offers WHERE id = $1`, [offerId]);
+    });
+    await auditEvent({
+      actorId: req.authSession?.userId ?? null,
+      action: 'offer_deleted',
+      entityType: 'offer',
+      entityId: offerId,
+      details: { title: offerRows[0].title, campaignId: id },
+    });
+    return reply.send({ ok: true });
+  });
+
   // POST /api/campaigns/:id/offers/:offerId/prepare — preparación manual
   // (Fase 7): acción expresa de Jon. Prepara la candidatura de una oferta
   // evaluada AUNQUE no supere el umbral automático. Idempotente.
