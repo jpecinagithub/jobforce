@@ -562,6 +562,61 @@ export function extractCompany(input: {
   return null;
 }
 
+/** Lugar plausible: con letras, sin URLs ni correos, longitud razonable. */
+function plausibleLocation(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const name = raw.replace(/\s+/g, ' ').replace(/[\s|,.;:\u2013-]+$/g, '').trim();
+  if (name.length < 2 || name.length > 70) return null;
+  if (!/[a-zA-Z\u00C0-\u024F]/.test(name)) return null;
+  if (/https?:|@|\bapply\b|\baplica/i.test(name)) return null;
+  return name;
+}
+
+/**
+ * Lugar de trabajo (columna DESTINO) a partir del texto de Exa, SOLO
+ * con evidencia literal — si no consta, null («—»), nunca inventado:
+ *  1. Campos estructurados de ReliefWeb: «City:» + «Country:».
+ *  2. Etiqueta «Location:»/«Job Location:»/«Ubicación:»/«Duty Station:».
+ *  3. Cabecera ATS «Location» seguida del valor en la línea siguiente.
+ *  4. Sufijo del título tras el último «-» («… - Somalia | ReliefWeb»).
+ */
+export function extractLocation(input: {
+  title?: string | null;
+  url: string;
+  text?: string | null;
+}): string | null {
+  const text = input.text ?? '';
+  if (text) {
+    const country = plausibleLocation(
+      text.match(/(?:^|\n)\s*(?:\*\*)?Country(?:\*\*)?\s*:\s*\**\s*([^\n*]{2,60})/i)?.[1],
+    );
+    const city = plausibleLocation(
+      text.match(/(?:^|\n)\s*(?:\*\*)?City(?:\*\*)?\s*:\s*\**\s*([^\n*]{2,60})/i)?.[1],
+    );
+    if (city && country) return `${city}, ${country}`;
+    if (country) return country;
+    const labeled = plausibleLocation(
+      text.match(
+        /(?:^|\n)[-\s*]*(?:\*\*)?(?:Job\s+Location|Location|Ubicaci\u00f3n|Workplace|Duty\s+Station)(?:\*\*)?\s*:\s*\**\s*([^\n*]{2,70})/i,
+      )?.[1],
+    );
+    if (labeled && !JOB_SEGMENT_RE.test(labeled)) return labeled;
+    const head = plausibleLocation(
+      text.match(/(?:^|\n)Location\s*\n\s*([^\n]{2,70})/i)?.[1],
+    );
+    if (head && !JOB_SEGMENT_RE.test(head)) return head;
+  }
+  const title = (input.title ?? '').replace(/\s+/g, ' ').trim();
+  if (title) {
+    const segs = title.replace(/\s*\|\s*ReliefWeb\s*$/i, '').split(/\s+[-\u2013\u2014]\s+/);
+    if (segs.length > 1) {
+      const last = plausibleLocation(segs[segs.length - 1]);
+      if (last && !JOB_SEGMENT_RE.test(last) && last.split(' ').length <= 5) return last;
+    }
+  }
+  return null;
+}
+
 const APPLY_SECTION_RE =
   /(how to apply|cómo aplicar|como aplicar|comment postuler|application process|para postular|so bewerben sie sich)/i;
 const APPLY_LINK_HINT_RE = /(apply|application|postul|careers|jobs|vacanc|emploi|bewerb)/i;
