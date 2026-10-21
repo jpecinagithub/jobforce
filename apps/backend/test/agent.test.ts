@@ -362,7 +362,7 @@ describe('agente conversacional', () => {
         text: EXA_TEXT,
         highlights: ['Finance Manager — IFRS, SAP, remote, English.'],
       }),
-      checkUrl: async () => ({ status: 'alive', via: 'head' }),
+      checkUrl: async () => ({ status: 'alive', via: 'http' }),
     });
     const res = await app.inject({ method: 'POST', url: '/api/agent/messages', headers: authed(auth), payload: { text: `aplica a esta oferta: ${GREENHOUSE_URL}` } });
     const body = res.json() as { jobId: string };
