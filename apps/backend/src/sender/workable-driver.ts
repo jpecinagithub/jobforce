@@ -430,7 +430,7 @@ export class WorkableDriver implements BrowserDriver {
       if (algunoRequerido) {
         throw new AnomaliaEnvio(
           'datos_ausentes',
-          `pregunta obligatoria de Workable sin respuesta determinada en tu perfil: «${opciones[0].grupo || grupo}» — dímela y la aplico`,
+          `pregunta obligatoria de Workable sin respuesta determinada en tu perfil: «${opciones[0].grupo}» — dímela y la aplico`,
         );
       }
     }
