@@ -263,7 +263,10 @@ describe('rutas de Gmail', () => {
       parsed.searchParams.get('redirect_uri'),
       'https://panel.example.com/api/integraciones/gmail/callback',
     );
-    assert.equal(parsed.searchParams.get('scope'), 'https://www.googleapis.com/auth/gmail.readonly');
+    assert.equal(
+      parsed.searchParams.get('scope'),
+      'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send',
+    );
     assert.equal(parsed.searchParams.get('access_type'), 'offline');
     assert.equal(parsed.searchParams.get('prompt'), 'consent');
     const state = parsed.searchParams.get('state');
