@@ -148,15 +148,17 @@ export class IcimsDriver implements BrowserDriver {
     if (this.page) return this.page;
     this.forwarder = await startForwarder();
     const chromium = cargarPlaywright();
-    this.browser = await chromium.launch({
+    const browser = (await chromium.launch({
       executablePath: resolveChromiumExe(),
       headless: true,
       ...(this.forwarder ? { proxy: { server: 'http://127.0.0.1:18080' } } : {}),
       args: ['--ignore-certificate-errors', '--no-sandbox', '--disable-dev-shm-usage'],
-    });
-    this.page = await this.browser.newPage({ viewport: { width: 1360, height: 1000 } });
+    })) as unknown as PwBrowser;
+    this.browser = browser;
+    const page = await browser.newPage({ viewport: { width: 1360, height: 1000 } });
+    this.page = page;
     mkdirSync(job.shotsDir, { recursive: true });
-    return this.page;
+    return page;
   }
 
   private async texto(page: PwPage): Promise<string> {
