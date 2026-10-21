@@ -239,15 +239,32 @@ export default function GoogleOAuthSection() {
             'no conectado'
           )}
         </li>
+        {data.oauth.connected && (
+          <li>
+            Permiso de envío:{' '}
+            {(data.oauth.scope ?? '').includes('gmail.send') ? (
+              'activado'
+            ) : (
+              <>
+                <strong>sin activar (solo lectura)</strong> — reconecta para que el Agente
+                pueda enviar candidaturas por correo
+              </>
+            )}
+          </li>
+        )}
       </ul>
       <p>
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => void onConnect()}
-          disabled={!data.client.configured || data.oauth.connected}
+          disabled={!data.client.configured}
         >
-          Conectar con Google
+          {!data.oauth.connected
+            ? 'Conectar con Google'
+            : (data.oauth.scope ?? '').includes('gmail.send')
+              ? 'Reconectar con Google'
+              : 'Reconectar y activar el envío'}
         </button>{' '}
         {data.oauth.connected && (
           <button type="button" className="btn btn-danger" onClick={() => void onRevoke()}>
