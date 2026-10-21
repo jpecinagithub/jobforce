@@ -496,36 +496,92 @@ async function probeUrl(url: string, method: 'HEAD' | 'GET'): Promise<ProbeOutco
 const isGoneStatus = (status: number): boolean => status === 404 || status === 410;
 const isDnsGone = (err: unknown): boolean => errorCodes(err).has('ENOTFOUND');
 
+/** Vía que produjo el veredicto: la API oficial del portal o la sonda HTTP genérica. */
+export type UrlCheckVia = 'workday_api' | 'http';
+
+export interface UrlCheckDetail {
+  status: UrlStatus;
+  via: UrlCheckVia;
+}
+
 /**
- * Sonda de vigencia en dos pasos (HEAD y, si no es concluyente, GET
- * parcial, ambos con cabeceras de navegador). «Roto» exige evidencia
- * doble y del mismo signo; cualquier bloqueo anti-bots o fallo
- * transitorio queda en `unknown`. Nunca lanza.
+ * URL de la API CXS de Workday para una oferta pública, o null si la URL
+ * no es de Workday. La página pública de Workday es una SPA que devuelve
+ * HTTP 200 SIEMPRE (oferta viva o muerta: el «muerto» se pinta con JS);
+ * el veredicto real está en su API — documentado en @jobforce/connectors:
+ * job inexistente → 404 JSON `{"errorCode":"HTTP_404"}`; job vivo → 200
+ * con `jobPostingInfo`. Caso real (2026-10-21): Finance Manager en GSK,
+ * muerta según su API y «viva» según la sonda HTML (25 ofertas de
+ * Workday del pool estaban «verificadas» con ese 200 vacío).
+ *
+ * URL pública: https://{tenant}.wd{N}.myworkdayjobs.com/{locale?}/{site}/job/{path}
+ * API CXS:     https://{tenant}.wd{N}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/job/{path}
  */
-export async function checkUrlStatus(url: string): Promise<UrlStatus> {
+export function workdayCxsJobUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (!u.hostname.endsWith('.myworkdayjobs.com')) return null;
+    const tenant = u.hostname.split('.')[0];
+    const segs = u.pathname.split('/').filter(Boolean);
+    const jobIdx = segs.indexOf('job');
+    if (!tenant || jobIdx < 1) return null;
+    const site = segs[jobIdx - 1];
+    const path = segs.slice(jobIdx + 1).join('/');
+    if (!site || !path) return null;
+    return `${u.origin}/wday/cxs/${tenant}/${site}/job/${path}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sonda de vigencia con veredicto y vía. Para Workday manda su API CXS
+ * (la sonda HTML no puede distinguir nada ahí: siempre 200); si la API
+ * no es concluyente, el resultado es `unknown`, nunca el 200 de la SPA.
+ * Para el resto, sonda HTTP en dos pasos (HEAD y, si no es concluyente,
+ * GET parcial, ambos con cabeceras de navegador): «roto» exige
+ * evidencia doble y del mismo signo; cualquier bloqueo anti-bots o
+ * fallo transitorio queda en `unknown`. Nunca lanza.
+ */
+export async function checkUrlStatusDetailed(url: string): Promise<UrlCheckDetail> {
+  const cxs = workdayCxsJobUrl(url);
+  if (cxs) {
+    const api = await probeUrl(cxs, 'GET');
+    if (api.kind === 'status') {
+      if (isGoneStatus(api.status)) return { status: 'broken', via: 'workday_api' };
+      if (api.status < 400) return { status: 'alive', via: 'workday_api' };
+    }
+    return { status: 'unknown', via: 'workday_api' };
+  }
+
   const head = await probeUrl(url, 'HEAD');
-  if (head.kind === 'status' && head.status < 400) return 'alive';
+  if (head.kind === 'status' && head.status < 400) return { status: 'alive', via: 'http' };
   if (head.kind === 'error' && !isDnsGone(head.err)) {
     // Fallo transitorio (timeout/TLS/red): sin evidencia de que la
     // página no exista; un segundo intento no lo convertiría en prueba.
     // Solo el DNS «no existe» merece confirmación con el segundo método.
-    return 'unknown';
+    return { status: 'unknown', via: 'http' };
   }
 
   const get = await probeUrl(url, 'GET');
   if (get.kind === 'status') {
-    if (get.status < 400) return 'alive';
+    if (get.status < 400) return { status: 'alive', via: 'http' };
     // Roto confirmado solo si AMBOS métodos dicen «no existe».
     if (isGoneStatus(get.status) && head.kind === 'status' && isGoneStatus(head.status)) {
-      return 'broken';
+      return { status: 'broken', via: 'http' };
     }
     if (isGoneStatus(get.status) && head.kind === 'error' && isDnsGone(head.err)) {
-      return 'broken';
+      return { status: 'broken', via: 'http' };
     }
-    return 'unknown';
+    return { status: 'unknown', via: 'http' };
   }
   // Ambos intentos sin respuesta: roto solo si el dominio no existe.
-  return isDnsGone(get.err) ? 'broken' : 'unknown';
+  return { status: isDnsGone(get.err) ? 'broken' : 'unknown', via: 'http' };
+}
+
+/** Sonda de vigencia: solo el estado (ver `checkUrlStatusDetailed`). */
+export async function checkUrlStatus(url: string): Promise<UrlStatus> {
+  return (await checkUrlStatusDetailed(url)).status;
 }
 
 /**

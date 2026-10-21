@@ -32,7 +32,7 @@ import { defaultCriteria } from '@jobforce/domain';
 import { query, withTransaction } from '@jobforce/database';
 import {
   canonicalUrl,
-  checkUrlStatus,
+  checkUrlStatusDetailed,
   createExaClient,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
   generateQueries,
@@ -41,6 +41,7 @@ import {
   selectQueries,
   fetchOfferText,
   type ExaClient,
+  type UrlCheckDetail,
   type UrlStatus,
 } from '@jobforce/search';
 import { evaluateOffer, type ProfileFactInput } from '@jobforce/eval';
@@ -84,8 +85,10 @@ export function resetCampaignTestDeps(): void {
 const exaClientFactory = (): ((apiKey: string) => ExaClient) =>
   testDeps.createExaClient ?? createExaClient;
 const evaluateOfferFn = (): typeof evaluateOffer => testDeps.evaluateOffer ?? evaluateOffer;
-const checkUrlStatusFn = (): ((url: string) => Promise<UrlStatus>) =>
-  testDeps.checkUrlStatus ?? checkUrlStatus;
+const checkUrlDetailedFn = (): ((url: string) => Promise<UrlCheckDetail>) =>
+  testDeps.checkUrlStatus
+    ? async (url) => ({ status: await testDeps.checkUrlStatus!(url), via: 'http' as const })
+    : checkUrlStatusDetailed;
 
 // ---------------------------------------------------------------------------
 // Esquemas zod.
@@ -528,21 +531,23 @@ export async function ejecutarBusquedaCampana(
         // bloquean agentes no-navegador). Un fallo de la validación no
         // bloquea la búsqueda: las ofertas quedan sin comprobar.
         try {
-          const check = checkUrlStatusFn();
+          const check = checkUrlDetailedFn();
           const rawChecks = await Promise.all(
-            newOffers.map(async (offer) => ({ id: offer.id, status: await check(offer.url) })),
+            newOffers.map(async (offer) => ({ id: offer.id, ...(await check(offer.url)) })),
           );
           // Guarda anti-bloqueo por IP: si Exa trae el texto completo de
           // la página, la página EXISTE (Exa la acaba de leer); un 404
           // desde la IP del servidor es entonces el portal bloqueando
           // IPs de datacenter (caso real Jobera, 2026-10-21: 404 desde
           // Oracle, 200 desde una conexión normal). Se degrada a
-          // «unknown»: se conserva, sin etiqueta.
+          // «unknown»: se conserva, sin etiqueta. La guarda NO se aplica
+          // si el veredicto viene de la API del portal (Workday CXS):
+          // ese 404 lo firma el propio ATS, no un cortafuegos.
           const checks = rawChecks.map((c) => {
-            if (c.status !== 'broken') return c;
+            if (c.status !== 'broken' || c.via === 'workday_api') return c;
             const offer = newOffers.find((o) => o.id === c.id);
             return offer?.exaText && offer.exaText.trim().length > 0
-              ? { id: c.id, status: 'unknown' as UrlStatus }
+              ? { ...c, status: 'unknown' as UrlStatus }
               : c;
           });
           const brokenIds = new Set(

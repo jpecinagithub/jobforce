@@ -11,6 +11,8 @@ import {
   canonicalUrl,
   checkUrlAlive,
   checkUrlStatus,
+  checkUrlStatusDetailed,
+  workdayCxsJobUrl,
   looksLikePersonProfile,
   extractApplicationContact,
   selectQueries,
@@ -482,5 +484,57 @@ describe('checkUrlStatus', () => {
       throw new Error('boom');
     }) as typeof fetch;
     assert.equal(await checkUrlStatus('https://example.com/oferta'), 'unknown');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Workday: la página pública es una SPA con 200 siempre; manda su API CXS
+// ---------------------------------------------------------------------------
+
+describe('Workday (API CXS)', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const GSK =
+    'https://gsk.wd5.myworkdayjobs.com/en-US/GSKCareers/job/Finance-Manager--Group-Reporting_447915-1';
+
+  /** La SPA siempre responde 200; la API CXS responde `apiStatus`. */
+  const stubWorkday = (apiStatus: number) => {
+    globalThis.fetch = (async (url: unknown) =>
+      new Response(null, {
+        status: String(url).includes('/wday/cxs/') ? apiStatus : 200,
+      })) as typeof fetch;
+  };
+
+  it('workdayCxsJobUrl construye la URL de la API (con y sin locale)', () => {
+    assert.equal(
+      workdayCxsJobUrl(GSK),
+      'https://gsk.wd5.myworkdayjobs.com/wday/cxs/gsk/GSKCareers/job/Finance-Manager--Group-Reporting_447915-1',
+    );
+    assert.equal(
+      workdayCxsJobUrl('https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/Tel-Aviv/Dev_JR1'),
+      'https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/job/Tel-Aviv/Dev_JR1',
+    );
+    assert.equal(workdayCxsJobUrl('https://boards.greenhouse.io/acme/jobs/123'), null);
+    assert.equal(workdayCxsJobUrl('https://gsk.wd5.myworkdayjobs.com/GSKCareers'), null);
+  });
+
+  it('API 404 → broken, aunque la página pública devuelva 200', async () => {
+    stubWorkday(404);
+    assert.deepEqual(await checkUrlStatusDetailed(GSK), { status: 'broken', via: 'workday_api' });
+    assert.equal(await checkUrlAlive(GSK), false);
+  });
+
+  it('API 200 → alive', async () => {
+    stubWorkday(200);
+    assert.deepEqual(await checkUrlStatusDetailed(GSK), { status: 'alive', via: 'workday_api' });
+  });
+
+  it('API no concluyente (500) → unknown, nunca el 200 de la SPA', async () => {
+    stubWorkday(500);
+    assert.equal(await checkUrlStatus(GSK), 'unknown');
   });
 });
