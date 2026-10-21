@@ -1,0 +1,798 @@
+/**
+ * Driver de navegador para Workday (portales *.wdN.myworkdayjobs.com).
+ *
+ * Encargo de Jon (2026-10-21): el agente debe aprender los portales de
+ * empresa empezando por Workday — crear la cuenta con SU email y SU
+ * contraseña (guardada cifrada en `portal_accounts`, nunca en claro) y
+ * completar la candidatura hasta el final. Flujo verificado en vivo
+ * con CLR (Continental Resources, R02656): job → «Apply» → panel
+ * «Start Your Application» → «Autofill with Resume» → asistente de 8
+ * pasos: 1 Create Account/Sign In, 2 Autofill with Resume,
+ * 3 My Information, 4 My Experience, 5-6 Application Questions,
+ * 7 Voluntary Disclosures, 8 Review → Submit.
+ *
+ * Motor genérico por pasos: en cada paso descubre los campos visibles
+ * con su etiqueta (label[for], aria-label, data-automation-id
+ * humanizado) y responde SOLO lo determinable desde el perfil:
+ *  - Datos de contacto/dirección desde `DatosEtiquetas`.
+ *  - Autorización de trabajo: veraz según el país del puesto (leído del
+ *    encabezado de la oferta): SÍ solo en España/UE; patrocinio =
+ *    lo contrario. Sueldo: el hecho del perfil, o parada nombrándola.
+ *  - «Voluntary Disclosures» (EEO): se elige la opción de no declarar
+ *    («Decline / I don't wish to answer») cuando existe.
+ *  - Cualquier otro campo obligatorio sin respuesta determinada:
+ *    parada `datos_ausentes` nombrando el campo/la pregunta exactos.
+ * Los desplegables de Workday (prompts) se resuelven por texto exacto.
+ */
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { cargarPlaywright, resolveChromiumExe, startForwarder } from './driver.js';
+import {
+  AnomaliaEnvio,
+  type AperturaResultado,
+  type BrowserDriver,
+  type DriverJob,
+  type PreparacionResultado,
+  type ResultadoDriver,
+} from './types.js';
+
+interface PwFrame {
+  url(): string;
+  evaluate<R>(fn: string): Promise<R>;
+  $(selector: string): Promise<unknown>;
+  click(selector: string, opts?: { timeout?: number }): Promise<void>;
+  fill(selector: string, value: string, opts?: { timeout?: number }): Promise<void>;
+  selectOption(selector: string, value: { label: string }): Promise<string[]>;
+  setInputFiles(selector: string, files: string | string[]): Promise<void>;
+}
+
+interface PwPage extends PwFrame {
+  goto(
+    url: string,
+    opts?: { waitUntil?: string; timeout?: number },
+  ): Promise<{ status(): number } | null>;
+  waitForTimeout(ms: number): Promise<void>;
+  screenshot(opts: { path: string; fullPage?: boolean }): Promise<void>;
+  frames(): PwFrame[];
+}
+
+interface PwBrowser {
+  newPage(opts?: Record<string, unknown>): Promise<PwPage>;
+  close(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Descubrimiento de campos del paso actual (marco principal).
+// ---------------------------------------------------------------------------
+
+interface CampoWD {
+  sel: string;
+  tipo: string; // text|email|tel|textarea|select|radio|checkbox|file|desplegable|date|number
+  etiqueta: string;
+  grupo: string; // pregunta (radios/checkbox)
+  requerido: boolean;
+  valor: string;
+  opciones: string[]; // radios: textos de las opciones del grupo (una fila por grupo)
+}
+
+const DESCUBRIR_JS = `(function () {
+  function texto(el) { return (el.textContent || '').replace(/\\s+/g, ' ').trim(); }
+  function visible(el) { return !!(el.offsetWidth || el.offsetHeight); }
+  function humanizar(aid) {
+    return (aid || '').replace(/^.*?--/, '').replace(/[-_]+/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+  }
+  function etiquetaDe(e) {
+    if (e.id) {
+      var l = document.querySelector('label[for="' + CSS.escape(e.id) + '"]');
+      if (l && texto(l)) return texto(l);
+    }
+    var al = e.getAttribute('aria-label');
+    if (al && al.trim()) return al.trim();
+    var nodo = e;
+    for (var k = 0; k < 6 && nodo.parentElement; k++) {
+      nodo = nodo.parentElement;
+      if (!nodo.querySelector) continue;
+      var lab = nodo.querySelector('label, legend');
+      if (lab && texto(lab)) return texto(lab);
+      var primer = nodo.children && nodo.children[0];
+      if (primer && primer !== e && texto(primer) && texto(primer).length <= 80 && !primer.querySelector('input, select, textarea, button')) {
+        return texto(primer);
+      }
+    }
+    var aid = e.getAttribute('data-automation-id') || '';
+    if (aid) return humanizar(aid);
+    return e.getAttribute('placeholder') || e.name || '';
+  }
+  function selectorDe(e) {
+    if (e.id) return '#' + CSS.escape(e.id);
+    var aid = e.getAttribute('data-automation-id');
+    if (aid) return '[data-automation-id="' + aid + '"]';
+    if (e.name) return e.tagName.toLowerCase() + '[name="' + e.name + '"]';
+    return '';
+  }
+  function requeridoDe(e, etiqueta) {
+    if (e.getAttribute('aria-required') === 'true' || e.required) return true;
+    if (/\\*/.test(etiqueta)) return true;
+    var nodo = e;
+    for (var k = 0; k < 4 && nodo.parentElement; k++) {
+      nodo = nodo.parentElement;
+      if (nodo.getAttribute && nodo.getAttribute('aria-required') === 'true') return true;
+    }
+    return false;
+  }
+  var out = [];
+  var radiosVistos = {};
+  var nodes = document.querySelectorAll('input, select, textarea, button[aria-haspopup="listbox"], [role="combobox"]');
+  for (var i = 0; i < nodes.length; i++) {
+    var e = nodes[i];
+    var tag = e.tagName.toLowerCase();
+    var tipo = tag === 'button' || e.getAttribute('role') === 'combobox'
+      ? 'desplegable'
+      : (e.getAttribute('type') || tag).toLowerCase();
+    if (tipo === 'hidden' || tipo === 'submit' || tipo === 'button' && tag !== 'button') continue;
+    if (tag === 'button' && e.getAttribute('aria-haspopup') !== 'listbox') continue;
+    if (!visible(e)) continue;
+    var etiqueta = etiquetaDe(e);
+    if (tipo === 'radio') {
+      var grupo = e.name || etiqueta;
+      if (radiosVistos[grupo]) continue;
+      radiosVistos[grupo] = true;
+      var opciones = [];
+      var delGrupo = document.querySelectorAll('input[type="radio"][name="' + CSS.escape(e.name) + '"]');
+      for (var j = 0; j < delGrupo.length; j++) {
+        var r = delGrupo[j];
+        var lab = (r.id && document.querySelector('label[for="' + CSS.escape(r.id) + '"]')) ||
+          r.closest('label');
+        opciones.push(lab ? texto(lab) : (r.value || ''));
+      }
+      // La pregunta: ancestro con texto propio descontando las opciones.
+      var pregunta = etiqueta;
+      var fs = e.closest('fieldset');
+      if (fs) {
+        var lg = fs.querySelector('legend');
+        if (lg && texto(lg)) pregunta = texto(lg);
+      }
+      out.push({
+        sel: 'input[type="radio"][name="' + e.name + '"]',
+        tipo: 'radio', etiqueta: pregunta, grupo: pregunta,
+        requerido: requeridoDe(e, pregunta),
+        valor: (function () {
+          for (var m = 0; m < delGrupo.length; m++) if (delGrupo[m].checked) {
+            var l2 = (delGrupo[m].id && document.querySelector('label[for="' + CSS.escape(delGrupo[m].id) + '"]')) || delGrupo[m].closest('label');
+            return l2 ? texto(l2) : delGrupo[m].value;
+          }
+          return '';
+        })(),
+        opciones: opciones,
+      });
+      continue;
+    }
+    var valor = '';
+    if (tipo === 'desplegable') valor = texto(e) || (e.value || '');
+    else if (tipo === 'checkbox') valor = e.checked ? 'on' : '';
+    else if (tipo === 'select') {
+      var opt = e.options && e.selectedIndex >= 0 ? e.options[e.selectedIndex] : null;
+      valor = opt ? (opt.text || '').trim() : '';
+      var ops = [];
+      if (e.options) for (var q = 0; q < e.options.length; q++) ops.push((e.options[q].text || '').trim());
+      out.push({ sel: selectorDe(e), tipo: tipo, etiqueta: etiqueta, grupo: etiqueta, requerido: requeridoDe(e, etiqueta), valor: valor, opciones: ops });
+      continue;
+    } else valor = e.value || '';
+    out.push({
+      sel: selectorDe(e), tipo: tipo, etiqueta: etiqueta, grupo: etiqueta,
+      requerido: requeridoDe(e, etiqueta), valor: valor, opciones: [],
+    });
+  }
+  return out;
+})()`;
+
+const PASO_JS = `(function () {
+  var t = document.body.innerText || '';
+  var m = t.match(/current step \\d+ of \\d+\\s*\\n([^\\n]+)/i);
+  if (m) return m[1].trim();
+  var cur = document.querySelector('[aria-current="step"]');
+  if (cur) return (cur.textContent || '').replace(/\\s+/g, ' ').trim();
+  return '';
+})()`;
+
+const ERRORES_JS = `(function () {
+  var out = [];
+  var widgets = document.querySelectorAll('[data-automation-id="errorWidget"], [role="alert"], [data-automation-id="toastMessage"]');
+  for (var i = 0; i < widgets.length; i++) {
+    var t = (widgets[i].textContent || '').replace(/\\s+/g, ' ').trim();
+    if (t) out.push(t.slice(0, 300));
+  }
+  var invalidos = document.querySelectorAll('[aria-invalid="true"]');
+  for (var j = 0; j < invalidos.length && out.length < 5; j++) {
+    var e = invalidos[j];
+    var lab = '';
+    if (e.id) { var l = document.querySelector('label[for="' + CSS.escape(e.id) + '"]'); if (l) lab = (l.textContent || '').trim(); }
+    if (lab) out.push('campo inválido: ' + lab);
+  }
+  return out;
+})()`;
+
+const CLICK_TEXTO_JS = `(function (textos) {
+  function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim().toLowerCase(); }
+  var els = document.querySelectorAll('a, button, [role="button"]');
+  for (var i = 0; i < els.length; i++) {
+    var e = els[i];
+    if (!(e.offsetWidth || e.offsetHeight)) continue;
+    var t = norm(e.textContent);
+    for (var k = 0; k < textos.length; k++) {
+      if (t === textos[k]) { e.scrollIntoView({block: 'center'}); e.click(); return e.textContent.trim(); }
+    }
+  }
+  return null;
+})`;
+
+const MARCAR_RADIO_JS = `(function (args) {
+  var inputs = document.querySelectorAll('input[type="radio"][name="' + CSS.escape(args.name) + '"]');
+  function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim().toLowerCase(); }
+  for (var i = 0; i < inputs.length; i++) {
+    var r = inputs[i];
+    var lab = (r.id && document.querySelector('label[for="' + CSS.escape(r.id) + '"]')) || r.closest('label');
+    var t = lab ? norm(lab.textContent) : norm(r.value);
+    if (t === norm(args.opcion) || t.indexOf(norm(args.opcion)) === 0) {
+      r.click();
+      return r.checked ? (lab ? lab.textContent.trim() : r.value) : null;
+    }
+  }
+  return null;
+})`;
+
+function norm(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** País del puesto desde el texto del encabezado («locations / Oklahoma City, OK»). */
+function paisDesdeTexto(texto: string): string {
+  const t = texto.slice(0, 2500);
+  if (/\b(OK|TX|NY|CA|OH|IL|FL|WA|CO|AZ|GA|NC|VA|MA|PA)\b|united states|u\.s\.a/i.test(t)) return 'US';
+  if (/united kingdom|london|\buk\b/i.test(t)) return 'UK';
+  if (/spain|españa|madrid|barcelona|logroño/i.test(t)) return 'ES';
+  return '';
+}
+
+const ZONA_DERECHO = new Set(['ES', 'EU', 'DE', 'FR', 'IT', 'PT', 'NL', 'BE', 'IE', 'AT', 'PL', 'SE', 'DK', 'FI']);
+
+export class WorkdayDriver implements BrowserDriver {
+  readonly portal = 'workday';
+  private browser: PwBrowser | null = null;
+  private page: PwPage | null = null;
+  private forwarder: import('node:net').Server | null = null;
+  private capturas: string[] = [];
+  private paisPuesto = '';
+
+  private async pageActiva(job: DriverJob): Promise<PwPage> {
+    if (this.page) return this.page;
+    this.forwarder = await startForwarder();
+    const chromium = cargarPlaywright();
+    const browser = (await chromium.launch({
+      executablePath: resolveChromiumExe(),
+      headless: true,
+      ...(this.forwarder ? { proxy: { server: 'http://127.0.0.1:18080' } } : {}),
+      args: [
+        '--ignore-certificate-errors',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+      ],
+    })) as unknown as PwBrowser;
+    this.browser = browser;
+    const page = await browser.newPage({
+      viewport: { width: 1360, height: 1100 },
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      locale: 'en-US',
+    });
+    this.page = page;
+    mkdirSync(job.shotsDir, { recursive: true });
+    return page;
+  }
+
+  async cerrar(): Promise<void> {
+    try {
+      await this.browser?.close();
+    } catch {
+      // Ya cerrado.
+    }
+    this.browser = null;
+    this.page = null;
+    try {
+      this.forwarder?.close();
+    } catch {
+      // Nada que cerrar.
+    }
+    this.forwarder = null;
+  }
+
+  private async capturar(page: PwPage, job: DriverJob, nombre: string): Promise<string> {
+    const ruta = join(job.shotsDir, nombre);
+    try {
+      await page.screenshot({ path: ruta, fullPage: false });
+    } catch {
+      // Evidencia, no debe tumbar el flujo.
+    }
+    this.capturas.push(ruta);
+    return ruta;
+  }
+
+  private async captchaVisible(page: PwPage): Promise<boolean> {
+    for (const f of page.frames()) {
+      try {
+        const hits = await f.evaluate<number>(
+          `[...document.querySelectorAll("iframe")].filter(x => /recaptcha|hcaptcha|turnstile|challenges\\.cloudflare/i.test(x.src || "") && x.offsetParent !== null).length`,
+        );
+        if (hits > 0) return true;
+      } catch {
+        // Marco inaccesible: se ignora.
+      }
+    }
+    return false;
+  }
+
+  private async texto(page: PwPage): Promise<string> {
+    return page.evaluate<string>(`(document.body.innerText || '').slice(0, 9000)`).catch(() => '');
+  }
+
+  private async clickTexto(page: PwPage, textos: string[]): Promise<string | null> {
+    return page.evaluate<string | null>(`${CLICK_TEXTO_JS}(${JSON.stringify(textos.map((t) => t.toLowerCase()))})`);
+  }
+
+  /** Abre el panel de aplicación y elige «Autofill with Resume». */
+  private async abrirAsistente(page: PwPage, job: DriverJob): Promise<void> {
+    await page.goto(job.applyUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(4000);
+    const texto = await this.texto(page);
+    if (/no longer accepting|position (is|has been) closed|job (is|has been) filled/i.test(texto)) {
+      throw new AnomaliaEnvio('oferta_cerrada', 'Workday muestra la oferta cerrada');
+    }
+    this.paisPuesto = paisDesdeTexto(texto);
+    // Cookies: «Decline» no tapa nada y no acepta seguimiento.
+    await this.clickTexto(page, ['decline', 'accept cookies']).catch(() => null);
+    const apply = await this.clickTexto(page, ['apply', 'apply now']);
+    if (!apply) throw new AnomaliaEnvio('formulario_cambiado', 'no se encontró el botón Apply de Workday');
+    await page.waitForTimeout(2500);
+    const auto = await this.clickTexto(page, ['autofill with resume']);
+    if (!auto) {
+      const manual = await this.clickTexto(page, ['apply manually']);
+      if (!manual) {
+        throw new AnomaliaEnvio('formulario_cambiado', 'el panel de Workday no ofrece Autofill ni Apply Manually');
+      }
+    }
+    await page.waitForTimeout(4500);
+  }
+
+  async verificarApertura(job: DriverJob): Promise<AperturaResultado> {
+    const page = await this.pageActiva(job);
+    await page.goto(job.applyUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(4000);
+    const texto = await this.texto(page);
+    if (/no longer accepting|position (is|has been) closed|job (is|has been) filled/i.test(texto)) {
+      return { abierta: false, detalle: 'Workday muestra la oferta cerrada' };
+    }
+    const apply = await this.clickTexto(page, ['apply', 'apply now']);
+    if (!apply) return { abierta: false, detalle: 'sin botón Apply visible en Workday' };
+    await page.waitForTimeout(2500);
+    const panel = await this.texto(page);
+    const ok = /start your application|autofill with resume|apply manually/i.test(panel);
+    return {
+      abierta: ok,
+      detalle: ok ? 'panel de aplicación de Workday visible' : 'el panel de aplicación no se abrió',
+    };
+  }
+
+  // --------------------------------------------------------------------
+  // Paso 1: cuenta (crear o entrar) con las credenciales cifradas.
+  // --------------------------------------------------------------------
+  private async pasoCuenta(page: PwPage, job: DriverJob): Promise<void> {
+    const datos = job.etiquetas;
+    if (!datos?.cuentaEmail || !datos?.cuentaPassword) {
+      throw new AnomaliaEnvio('datos_ausentes', 'sin credenciales de cuenta para Workday');
+    }
+    // Esperar a que el formulario de cuenta renderice.
+    for (let i = 0; i < 8; i++) {
+      const t = await this.texto(page);
+      if (/create account|sign in/i.test(t) && (await page.$('input[type="password"]'))) break;
+      await page.waitForTimeout(1500);
+    }
+    let texto = await this.texto(page);
+    // Si estamos en Sign In y existe la opción de crear cuenta, ir allí.
+    if (/sign in/i.test(texto) && !/create account/i.test(texto.split('\n')[0] ?? '')) {
+      await this.clickTexto(page, ['create account']).catch(() => null);
+      await page.waitForTimeout(2000);
+      texto = await this.texto(page);
+    }
+    const esCrear = /create account/i.test(texto);
+    const emailSel = (await page.$('input[type="email"]')) ? 'input[type="email"]' : 'input[name*="email" i], input[id*="email" i]';
+    await page.fill(emailSel, datos.cuentaEmail).catch(async () => {
+      // Respaldo: primer input de texto visible.
+      await page.fill('input[type="text"]', datos.cuentaEmail);
+    });
+    const passwords = await page.evaluate<number>(
+      `[...document.querySelectorAll('input[type="password"]')].filter(e => e.offsetWidth || e.offsetHeight).length`,
+    );
+    for (let i = 0; i < passwords; i++) {
+      await page
+        .fill(`input[type="password"] >> nth=${i}`, datos.cuentaPassword)
+        .catch(() => undefined);
+    }
+    // Consentimientos de la creación de cuenta (checkboxes visibles).
+    await page.evaluate(`(function () {
+      var cs = document.querySelectorAll('input[type="checkbox"]');
+      for (var i = 0; i < cs.length; i++) if ((cs[i].offsetWidth || cs[i].offsetHeight) && !cs[i].checked) cs[i].click();
+    })()`);
+    await this.capturar(page, job, 'workday-cuenta.png');
+    const boton = esCrear
+      ? await this.clickTexto(page, ['create account'])
+      : await this.clickTexto(page, ['sign in']);
+    if (!boton) throw new AnomaliaEnvio('formulario_cambiado', 'sin botón de cuenta en Workday');
+    await page.waitForTimeout(5000);
+    texto = await this.texto(page);
+    if (/verify your email|verification code|check your email|confirm your email/i.test(texto)) {
+      await this.capturar(page, job, 'workday-verificacion.png');
+      throw new AnomaliaEnvio(
+        'captcha_mfa',
+        'Workday pide verificar el correo electrónico para crear la cuenta: el código llega a tu email y hay que introducirlo en el asistente',
+      );
+    }
+    if (/already (exists|registered)|account.*exist|email.*in use/i.test(texto)) {
+      // La cuenta ya existía: entrar con las mismas credenciales.
+      await this.clickTexto(page, ['sign in']).catch(() => null);
+      await page.waitForTimeout(2000);
+      await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
+      await page.fill('input[type="password"]', datos.cuentaPassword).catch(() => undefined);
+      await this.clickTexto(page, ['sign in']);
+      await page.waitForTimeout(5000);
+      texto = await this.texto(page);
+    }
+    const paso = await page.evaluate<string>(PASO_JS).catch(() => '');
+    if (/create account|sign in/i.test(paso) || (await page.$('input[type="password"]'))) {
+      const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
+      await this.capturar(page, job, 'workday-cuenta-error.png');
+      throw new AnomaliaEnvio(
+        'formulario_cambiado',
+        `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
+      );
+    }
+  }
+
+  // --------------------------------------------------------------------
+  // Paso 2: autofill con el CV.
+  // --------------------------------------------------------------------
+  private async pasoAutofill(page: PwPage, job: DriverJob): Promise<void> {
+    const input = await page.$('input[type="file"]');
+    if (input) {
+      await page.setInputFiles('input[type="file"]', job.cvPath);
+      await page.waitForTimeout(9000);
+    }
+    await this.capturar(page, job, 'workday-autofill.png');
+  }
+
+  // --------------------------------------------------------------------
+  // Resolvedor de respuestas desde el perfil (solo lo determinable).
+  // --------------------------------------------------------------------
+  private resolverTexto(campo: CampoWD, job: DriverJob): string | null {
+    const p = job.etiquetas;
+    if (!p) return null;
+    const l = norm(campo.etiqueta);
+    const ciudad = p.ubicacion.split(',')[0]?.trim() ?? '';
+    if (/first name|given name/.test(l)) return p.nombre;
+    if (/last name|family name|surname/.test(l)) return p.apellidos;
+    if (/full name|legal name|candidate name/.test(l)) return `${p.nombre} ${p.apellidos}`.trim();
+    if (/^email|e mail|email address/.test(l)) return p.email;
+    if (/phone|telefono|mobile|cell/.test(l)) return p.telefono.replace(/^\+34\s*/, '');
+    if (/address line 1|street|direccion/.test(l)) return null; // sin hecho: se nombra al final
+    if (/address line 2/.test(l)) return ''; // opcional: vacío válido
+    if (/^city|ciudad/.test(l)) return ciudad;
+    if (/postal|zip|postcode|codigo postal/.test(l)) return null;
+    if (/linkedin/.test(l)) return p.linkedin;
+    if (/salary|compensation|expected pay|pay expectation/.test(l)) return p.salarioEsperado;
+    if (/how did you hear|source/.test(l)) return null;
+    return null;
+  }
+
+  private resolverSiNo(campo: CampoWD): 'si' | 'no' | null {
+    const l = norm(campo.grupo || campo.etiqueta);
+    const autorizado = ZONA_DERECHO.has(this.paisPuesto) || this.paisPuesto === '';
+    // Cuidado: paisPuesto '' (no detectado) NO equivale a autorizado;
+    // solo se responde si el país se conoce.
+    if (this.paisPuesto) {
+      if (/authori[sz]ed to work|legally.*work|right to work|eligible to work/.test(l)) {
+        return autorizado ? 'si' : 'no';
+      }
+      if (/sponsorship|require.*visa|visa.*support/.test(l)) {
+        return autorizado ? 'no' : 'si';
+      }
+    }
+    if (/at least 18|18 years of age|over 18/.test(l)) return 'si';
+    if (/previously employed|worked (for|at) (us|the company)|former employee/.test(l)) return 'no';
+    if (/relative|family member/.test(l) && /employ|work/.test(l)) return 'no';
+    // Divulgaciones voluntarias: no declarar.
+    if (/decline|prefer not|do not wish|not to answer/.test(l)) return 'si';
+    return null;
+  }
+
+  private opcionSiNo(campo: CampoWD, r: 'si' | 'no'): string | null {
+    const quiere = r === 'si' ? /^(yes|si|sí|true)$/i : /^(no|false)$/i;
+    return campo.opciones.find((o) => quiere.test(o.trim())) ?? null;
+  }
+
+  private opcionDeclinar(campo: CampoWD): string | null {
+    return (
+      campo.opciones.find((o) =>
+        /decline|do not wish|prefer not|not to answer|no deseo|no quiero/i.test(o),
+      ) ?? null
+    );
+  }
+
+  /** Rellena un desplegable (prompt) de Workday por texto exacto. */
+  private async seleccionarPrompt(page: PwPage, campo: CampoWD, valor: string): Promise<boolean> {
+    if (!campo.sel) return false;
+    await page.click(campo.sel, { timeout: 5000 }).catch(() => undefined);
+    await page.waitForTimeout(1200);
+    // Si se abrió un buscador, teclear el valor.
+    const buscador = await page.$(
+      'input[data-automation-id="searchBox"], [data-automation-id="promptSearch"] input, input[placeholder*="Search" i]',
+    );
+    if (buscador) {
+      await page
+        .fill(
+          'input[data-automation-id="searchBox"], [data-automation-id="promptSearch"] input, input[placeholder*="Search" i]',
+          valor,
+        )
+        .catch(() => undefined);
+      await page.waitForTimeout(1200);
+    }
+    const elegido = await page.evaluate<boolean>(`(function (valor) {
+      function norm(s) { return (s || '').replace(/\\s+/g, ' ').trim().toLowerCase(); }
+      var ops = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"], [role="listbox"] li, ul li div');
+      for (var i = 0; i < ops.length; i++) {
+        var t = norm(ops[i].textContent);
+        if (t === norm(valor) || t.indexOf(norm(valor)) === 0) { ops[i].click(); return true; }
+      }
+      return false;
+    })(${JSON.stringify(valor)})`);
+    if (elegido) await page.waitForTimeout(800);
+    return elegido;
+  }
+
+  /** Rellena todos los campos determinables del paso actual. */
+  private async rellenarPaso(page: PwPage, job: DriverJob): Promise<{ rellenados: number; faltan: string[] }> {
+    const campos = await page.evaluate<CampoWD[]>(DESCUBRIR_JS);
+    let rellenados = 0;
+    const faltan: string[] = [];
+    const gruposRadioHechos = new Set<string>();
+    for (const campo of campos) {
+      try {
+        if (campo.tipo === 'file') continue;
+        if (campo.tipo === 'radio') {
+          if (gruposRadioHechos.has(campo.grupo)) continue;
+          gruposRadioHechos.add(campo.grupo);
+          if (campo.valor) continue;
+          const declinar = this.opcionDeclinar(campo);
+          const sino = this.resolverSiNo(campo);
+          const opcion =
+            declinar ?? (sino ? this.opcionSiNo(campo, sino) : null);
+          if (opcion) {
+            const nombre = campo.sel.match(/name="([^"]+)"/)?.[1] ?? '';
+            const marcada = await page.evaluate<string | null>(
+              `${MARCAR_RADIO_JS}(${JSON.stringify({ name: nombre, opcion })})`,
+            );
+            if (marcada) rellenados++;
+            else if (campo.requerido) faltan.push(campo.grupo || campo.etiqueta);
+          } else if (campo.requerido) {
+            faltan.push(campo.grupo || campo.etiqueta);
+          }
+          continue;
+        }
+        if (campo.tipo === 'checkbox') {
+          if (campo.valor === 'on') continue;
+          const l = norm(campo.etiqueta);
+          // Solo certificaciones/consentimientos evidentes.
+          if (/certify|confirm that|i agree|acknowledge|attest|declare that|consent/i.test(l)) {
+            await page.evaluate(`(function (sel) {
+              var e = document.querySelector(sel);
+              if (e && !e.checked) e.click();
+            })(${JSON.stringify(campo.sel)})`);
+            rellenados++;
+          } else if (campo.requerido) {
+            faltan.push(campo.etiqueta);
+          }
+          continue;
+        }
+        if (campo.valor && campo.valor !== 'Select One' && campo.valor !== 'Search') continue;
+        if (campo.tipo === 'select') {
+          const l = norm(campo.etiqueta);
+          let valor: string | null = null;
+          if (/country/.test(l)) valor = job.etiquetas?.paisResidencia ?? null;
+          else if (/gender|sex/.test(l)) valor = this.opcionDeclinar(campo);
+          else {
+            const t = this.resolverTexto(campo, job);
+            valor = t && campo.opciones.some((o) => norm(o) === norm(t)) ? t : null;
+          }
+          if (valor) {
+            await page.selectOption(campo.sel, { label: valor }).catch(() => undefined);
+            rellenados++;
+          } else if (campo.requerido) faltan.push(campo.etiqueta);
+          continue;
+        }
+        if (campo.tipo === 'desplegable') {
+          const l = norm(campo.etiqueta);
+          let valor: string | null = null;
+          if (/country/.test(l)) valor = job.etiquetas?.paisResidencia ?? 'Spain';
+          else if (/phone.*(code|country)|country.*code/.test(l)) valor = 'Spain';
+          else if (/device|phone type/.test(l)) valor = 'Mobile';
+          else if (/gender|sex|ethnic|race|veteran|disability/.test(l)) valor = this.opcionDeclinar(campo);
+          else if (/state|province|provincia|region/.test(l)) valor = 'La Rioja';
+          if (valor) {
+            const okSel = await this.seleccionarPrompt(page, campo, valor);
+            if (okSel) rellenados++;
+            else if (campo.requerido) faltan.push(campo.etiqueta);
+          } else if (campo.requerido) {
+            faltan.push(campo.etiqueta);
+          }
+          continue;
+        }
+        // Texto / email / tel / textarea / fecha / número.
+        const respuesta = this.resolverTexto(campo, job);
+        if (respuesta !== null && campo.sel) {
+          if (respuesta !== '') {
+            await page.fill(campo.sel, respuesta, { timeout: 5000 });
+            rellenados++;
+          }
+        } else if (campo.requerido) {
+          faltan.push(campo.etiqueta);
+        }
+      } catch {
+        if (campo.requerido) faltan.push(campo.etiqueta);
+      }
+    }
+    return { rellenados, faltan };
+  }
+
+  private async clickSiguiente(page: PwPage): Promise<boolean> {
+    const t = await this.clickTexto(page, [
+      'save and continue',
+      'save & continue',
+      'next',
+      'continue',
+      'save',
+    ]);
+    return t !== null;
+  }
+
+  private async prepararInterno(job: DriverJob): Promise<PreparacionResultado> {
+    const page = await this.pageActiva(job);
+    await this.abrirAsistente(page, job);
+    let paso = await page.evaluate<string>(PASO_JS).catch(() => '');
+    if (/create account|sign in/i.test(paso)) {
+      await this.pasoCuenta(page, job);
+      paso = await page.evaluate<string>(PASO_JS).catch(() => '');
+    }
+    let rellenadosTotal = 0;
+    for (let i = 0; i < 10; i++) {
+      if (await this.captchaVisible(page)) {
+        await this.capturar(page, job, 'workday-captcha.png');
+        throw new AnomaliaEnvio('captcha_mfa', 'Workday muestra un captcha visible en el asistente');
+      }
+      paso = await page.evaluate<string>(PASO_JS).catch(() => '');
+      if (/review/i.test(paso)) break;
+      if (/autofill/i.test(paso)) {
+        await this.pasoAutofill(page, job);
+      } else {
+        const { rellenados, faltan } = await this.rellenarPaso(page, job);
+        rellenadosTotal += rellenados;
+        await this.capturar(page, job, `workday-paso-${i + 1}.png`);
+        if (faltan.length > 0) {
+          // Un intento de avanzar igualmente: Workday a veces marca
+          // como requerido lo opcional; si bloquea, el error lo nombra.
+          const antes = paso;
+          const clickOk = await this.clickSiguiente(page);
+          await page.waitForTimeout(3000);
+          const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
+          const nuevoPaso = await page.evaluate<string>(PASO_JS).catch(() => '');
+          if (!clickOk || nuevoPaso === antes) {
+            throw new AnomaliaEnvio(
+              'datos_ausentes',
+              `Workday exige y no consta en el perfil: ${[...new Set(faltan)].join(' · ').slice(0, 300)}${errores.length ? ` — ${errores.join(' · ').slice(0, 200)}` : ''}`,
+            );
+          }
+          continue;
+        }
+      }
+      const antes = paso;
+      const okClick = await this.clickSiguiente(page);
+      if (!okClick) {
+        if (/review/i.test(await this.texto(page))) break;
+        throw new AnomaliaEnvio(
+          'formulario_cambiado',
+          `sin botón de avance en el paso «${paso || 'desconocido'}» de Workday`,
+        );
+      }
+      await page.waitForTimeout(3500);
+      const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
+      const nuevoPaso = await page.evaluate<string>(PASO_JS).catch(() => '');
+      if (nuevoPaso === antes && errores.length > 0) {
+        throw new AnomaliaEnvio(
+          'datos_ausentes',
+          `Workday no deja avanzar en «${antes}»: ${errores.join(' · ').slice(0, 320)}`,
+        );
+      }
+    }
+    paso = await page.evaluate<string>(PASO_JS).catch(() => '');
+    await this.capturar(page, job, 'workday-review.png');
+    if (!/review/i.test(paso) && !/review/i.test(await this.texto(page))) {
+      throw new AnomaliaEnvio(
+        'formulario_cambiado',
+        `el asistente de Workday no llegó al paso Review (último paso visto: «${paso || '—'}»)`,
+      );
+    }
+    return { camposRellenados: rellenadosTotal, uploadsOk: true, capturas: this.capturas };
+  }
+
+  async preparar(job: DriverJob): Promise<PreparacionResultado> {
+    return this.prepararInterno(job);
+  }
+
+  async enviarYConfirmar(job: DriverJob): Promise<ResultadoDriver> {
+    const page = await this.pageActiva(job);
+    const submit = await this.clickTexto(page, ['submit', 'submit application']);
+    if (!submit) {
+      throw new AnomaliaEnvio('formulario_cambiado', 'sin botón Submit en el Review de Workday');
+    }
+    await page.waitForTimeout(4000);
+    // Posible modal de confirmación.
+    await this.clickTexto(page, ['submit', 'confirm', 'ok', 'yes']).catch(() => null);
+    const EXITO = /application submitted|submitted successfully|successfully submitted|thank you for applying|application has been received|you have (successfully )?applied/i;
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(3000);
+      const texto = await this.texto(page);
+      if (EXITO.test(texto)) {
+        await this.capturar(page, job, 'workday-tras-envio.png');
+        const m = texto.match(/.{0,60}(application submitted|successfully submitted|thank you for applying).{0,80}/i);
+        const req = job.applyUrl.match(/_(R\d{3,})/)?.[1] ?? null;
+        return {
+          confirmado: true,
+          confirmacion: {
+            mensaje: (m?.[0] ?? 'Candidatura enviada en Workday').replace(/\s+/g, ' ').trim().slice(0, 220),
+            urlTrasEnvio: page.url(),
+            referencia: req,
+            capturas: this.capturas,
+          },
+          capturas: this.capturas,
+          evidencia: { via: 'workday', pasoFinal: 'review-submit' },
+        };
+      }
+      if (/candidate home|my applications/i.test(texto) && /in progress|submitted/i.test(texto)) {
+        await this.capturar(page, job, 'workday-tras-envio.png');
+        const req = job.applyUrl.match(/_(R\d{3,})/)?.[1] ?? null;
+        return {
+          confirmado: true,
+          confirmacion: {
+            mensaje: 'Workday muestra la candidatura en «My Applications»',
+            urlTrasEnvio: page.url(),
+            referencia: req,
+            capturas: this.capturas,
+          },
+          capturas: this.capturas,
+          evidencia: { via: 'workday', pasoFinal: 'candidate-home' },
+        };
+      }
+    }
+    await this.capturar(page, job, 'workday-tras-envio.png');
+    return {
+      confirmado: false,
+      capturas: this.capturas,
+      evidencia: { via: 'workday', nota: 'sin señal de éxito visible tras Submit' },
+    };
+  }
+}

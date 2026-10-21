@@ -101,3 +101,40 @@ export async function obtenerOCrearCuentaPortal(
   });
   return { host: hostNorm, email, password, creada: true };
 }
+
+/**
+ * Guarda (o actualiza) la cuenta de un portal con la contraseña que
+ * Jon ha elegido expresamente (2026-10-21, para Workday y sucesivos):
+ * se cifra igual que las generadas y jamás viaja en claro fuera de
+ * esta llamada. Si ya existía una fila (p. ej. una contraseña generada
+ * nunca registrada), la de Jon la sustituye: es su cuenta.
+ */
+export async function establecerCuentaPortal(
+  config: AppConfig,
+  host: string,
+  email: string,
+  password: string,
+  actorId: string | null,
+): Promise<void> {
+  const hostNorm = host.trim().toLowerCase();
+  const key = resolveEncryptionKey(config.secretsEncryptionKey);
+  const enc = encryptSecret(password, key);
+  await query(
+    `INSERT INTO portal_accounts
+       (portal, username, password_ciphertext, password_nonce, key_ref, last_used_at)
+     VALUES ($1, $2, $3, $4, $5, now())
+     ON CONFLICT (portal, username) DO UPDATE
+       SET password_ciphertext = EXCLUDED.password_ciphertext,
+           password_nonce = EXCLUDED.password_nonce,
+           key_ref = EXCLUDED.key_ref,
+           last_used_at = now()`,
+    [hostNorm, email, enc.ciphertext, enc.nonce, enc.keyRef],
+  );
+  await auditEvent({
+    actorId,
+    action: 'portal_account_created',
+    entityType: 'portal_account',
+    entityId: null,
+    details: { host: hostNorm, email, origen: 'password_elegida_por_jon' },
+  });
+}

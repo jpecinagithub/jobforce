@@ -50,6 +50,7 @@ import { construirPerfilCandidato } from '../prepare.js';
 import { crearDriver } from './driver.js';
 import { IcimsDriver } from './icims-driver.js';
 import { WorkableDriver } from './workable-driver.js';
+import { WorkdayDriver } from './workday-driver.js';
 import { presupuestoDisponible, registrarTiempoNavegador } from '@jobforce/costs';
 import {
   AnomaliaEnvio,
@@ -208,7 +209,7 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
   const shotsDir = join(base, 'jobforce', 'sends', send.id, 'capturas');
   mkdirSync(shotsDir, { recursive: true });
 
-  if (portal === 'icims' || portal === 'workable') {
+  if (portal === 'icims' || portal === 'workable' || portal === 'workday') {
     // iCIMS y Workable no usan selectores preconfigurados: el driver
     // rellena el formulario por etiquetas con los datos del perfil
     // (iCIMS además con la cuenta del portal, creada cifrada si no
@@ -572,7 +573,9 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
             ? new IcimsDriver()
             : j.portal === 'workable'
               ? new WorkableDriver()
-              : crearDriver(j.portal));
+              : j.portal === 'workday'
+                ? new WorkdayDriver()
+                : crearDriver(j.portal));
       driver = factory(job);
     } catch (e) {
       if (e instanceof AnomaliaEnvio) {
