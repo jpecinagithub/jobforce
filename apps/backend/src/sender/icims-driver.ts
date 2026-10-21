@@ -241,16 +241,31 @@ export class IcimsDriver implements BrowserDriver {
     return partes.join('\n');
   }
 
-  /** Marco que contiene el formulario (campos o un botón de avance/envío). */
+  /**
+   * Marco que contiene el formulario. OJO: la página escaparate de la
+   * organización también tiene campos (newsletter, buscador) — se
+   * puntúa cada marco y manda el de la APLICACIÓN iCIMS (in_iframe,
+   * campo de correo/contraseña), no el primero con cualquier campo
+   * (fallo verificado en vivo: se rellenaba el correo del newsletter
+   * y «Next» nunca aparecía).
+   */
   private async superficie(page: PwPage): Promise<PwFrame> {
+    let mejor: { f: PwFrame; puntos: number } | null = null;
     for (const f of page.frames()) {
+      let campos: CampoDescubierto[] = [];
       try {
-        const campos = await f.evaluate<CampoDescubierto[]>(DESCUBRIR_CAMPOS_JS);
-        if (campos.length > 0) return f;
+        campos = await f.evaluate<CampoDescubierto[]>(DESCUBRIR_CAMPOS_JS);
       } catch {
-        // Siguiente marco.
+        continue;
       }
+      if (campos.length === 0) continue;
+      let puntos = campos.length;
+      if (/in_iframe=1/.test(f.url())) puntos += 50;
+      if (campos.some((c) => c.tipo === 'email')) puntos += 20;
+      if (campos.some((c) => c.tipo === 'password')) puntos += 10;
+      if (!mejor || puntos > mejor.puntos) mejor = { f, puntos };
     }
+    if (mejor) return mejor.f;
     for (const f of page.frames()) {
       try {
         const hay = await f.evaluate<boolean>(
