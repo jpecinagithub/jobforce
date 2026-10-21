@@ -426,99 +426,77 @@ export class WorkdayDriver implements BrowserDriver {
   // --------------------------------------------------------------------
   // Paso 1: cuenta (crear o entrar) con las credenciales cifradas.
   // --------------------------------------------------------------------
+  /**
+   * Paso 1 como máquina de estados con sondeo (reescrito tras 5
+   * pasadas en vivo contra CLR): Workday tarda ~10 s en pintar el
+   * selector social, redirige a la página del portal cuando el alta
+   * choca con una cuenta existente, y el contenido del paso a veces
+   * llega vacío y tarda en renderizar. Se clasifica la pantalla en
+   * cada ronda y se actúa según el estado, con contadores anti-bucle
+   * (máx. 1 alta + 1 entrada por ejecución).
+   */
   private async pasoCuenta(page: PwPage, job: DriverJob): Promise<void> {
     const datos = job.etiquetas;
     if (!datos?.cuentaEmail || !datos?.cuentaPassword) {
       throw new AnomaliaEnvio('datos_ausentes', 'sin credenciales de cuenta para Workday');
     }
-    // Workday muestra primero un selector social que tarda ~10 s en
-    // pintarse: el formulario de email aparece al pulsar «Sign in with
-    // email». El clic se reintenta en cada ronda hasta que el campo de
-    // contraseña existe (una sola pulsación temprana no coincide nunca
-    // con el render — verificado en vivo, CLR 2026-10-21).
-    for (let i = 0; i < 14; i++) {
-      if (await page.$('input[type="password"]')) break;
-      await this.clickTexto(page, ['sign in with email']).catch(() => null);
-      await page.waitForTimeout(2000);
-    }
-    let texto = await this.texto(page);
-    // Si el formulario está en modo Sign In (1 contraseña) y hay un
-    // enlace a «Create Account», pasar a crear (primera vez aquí).
-    let numPass = await page.evaluate<number>(
-      `[...document.querySelectorAll('input[type="password"]')].filter(e => e.offsetWidth || e.offsetHeight).length`,
-    );
-    if (numPass === 1) {
-      const toggled = await this.clickTexto(page, ['create account']).catch(() => null);
-      if (toggled) {
-        await page.waitForTimeout(2500);
-        numPass = await page.evaluate<number>(
-          `[...document.querySelectorAll('input[type="password"]')].filter(e => e.offsetWidth || e.offsetHeight).length`,
-        );
-        texto = await this.texto(page);
-      }
-    }
-    const esCrear = numPass >= 2;
-    const emailSel = (await page.$('input[type="email"]')) ? 'input[type="email"]' : 'input[name*="email" i], input[id*="email" i]';
-    await page.fill(emailSel, datos.cuentaEmail).catch(async () => {
-      // Respaldo: primer input de texto visible.
-      await page.fill('input[type="text"]', datos.cuentaEmail);
-    });
-    for (let i = 0; i < numPass; i++) {
-      await page
-        .fill(`input[type="password"] >> nth=${i}`, datos.cuentaPassword)
-        .catch(() => undefined);
-    }
-    // Consentimientos de la creación de cuenta (checkboxes visibles).
-    await page.evaluate(`(function () {
-      var cs = document.querySelectorAll('input[type="checkbox"]');
-      for (var i = 0; i < cs.length; i++) if ((cs[i].offsetWidth || cs[i].offsetHeight) && !cs[i].checked) cs[i].click();
-    })()`);
-    await this.capturar(page, job, 'workday-cuenta.png');
-    // Clic NATIVO (getByRole): el clic JS no disparaba el alta en este
-    // tenant (formulario intacto tras el intento, verificado en vivo).
-    let boton: string | null = null;
-    try {
-      const loc = page.getByRole('button', {
-        name: esCrear ? /create account/i : /sign in/i,
-      }).first();
-      if (await loc.isVisible()) {
-        await loc.click();
-        boton = esCrear ? 'create account' : 'sign in';
-      }
-    } catch {
-      boton = null;
-    }
-    if (!boton) {
-      boton = esCrear
-        ? await this.clickTexto(page, ['create account'])
-        : await this.clickTexto(page, ['sign in']);
-    }
-    if (!boton) throw new AnomaliaEnvio('formulario_cambiado', 'sin botón de cuenta en Workday');
-    // Sondeo de avance (la creación de cuenta puede tardar >5 s).
-    for (let i = 0; i < 12; i++) {
-      await page.waitForTimeout(2500);
-      const pasoNow = await page.evaluate<string>(PASO_JS).catch(() => '');
-      if (pasoNow && !/create account|sign in/i.test(pasoNow)) break;
-      if (!(await page.$('input[type="password"]'))) break;
-    }
-    texto = await this.texto(page);
-    if (/verify your email|verification code|check your email|confirm your email/i.test(texto)) {
-      await this.capturar(page, job, 'workday-verificacion.png');
-      throw new AnomaliaEnvio(
-        'captcha_mfa',
-        'Workday pide verificar el correo electrónico para crear la cuenta: el código llega a tu email y hay que introducirlo en el asistente',
-      );
-    }
-    const avanzo = async (): Promise<boolean> => {
-      const p = await page.evaluate<string>(PASO_JS).catch(() => '');
-      return p !== '' && !/create account|sign in/i.test(p);
+    type Estado =
+      | 'otro_paso'
+      | 'formulario_crear'
+      | 'formulario_entrar'
+      | 'selector'
+      | 'cargando'
+      | 'desconocido';
+    const clasificar = async (): Promise<Estado> => {
+      return page.evaluate<Estado>(`(function () {
+        var texto = document.body.innerText || '';
+        var hayStepper = /current step \d+ of \d+/.test(texto);
+        var pass = document.querySelectorAll('input[type="password"]');
+        var passVisibles = 0;
+        for (var i = 0; i < pass.length; i++) if (pass[i].offsetWidth || pass[i].offsetHeight) passVisibles++;
+        var m = texto.match(/current step \d+ of \d+\s*\n([^\n]+)/i);
+        var paso = m ? m[1].trim().toLowerCase() : '';
+        if (hayStepper && paso && !/create account|sign in/.test(paso)) return 'otro_paso';
+        if (passVisibles >= 2) return 'formulario_crear';
+        if (passVisibles === 1) return 'formulario_entrar';
+        if (/sign in with email/i.test(texto)) return 'selector';
+        if (hayStepper) return 'cargando';
+        return 'desconocido';
+      })()`);
     };
-    if (!(await avanzo())) {
-      // La cuenta YA existe (creada en una pasada anterior): entrar con
-      // las mismas credenciales pulsando el enlace DEL FORMULARIO
-      // («Already have an account? Sign In») — el de la cabecera saca
-      // del asistente a la página del portal (verificado en vivo).
-      await page.evaluate(`(function () {
+    const rellenarYEnviar = async (crear: boolean): Promise<void> => {
+      const emailSel = (await page.$('input[type="email"]'))
+        ? 'input[type="email"]'
+        : 'input[name*="email" i], input[id*="email" i]';
+      await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
+      const n = await page.evaluate<number>(
+        `[...document.querySelectorAll('input[type="password"]')].filter(e => e.offsetWidth || e.offsetHeight).length`,
+      );
+      for (let i = 0; i < n; i++) {
+        await page.fill(`input[type="password"] >> nth=${i}`, datos.cuentaPassword).catch(() => undefined);
+      }
+      if (crear) {
+        await page.evaluate(`(function () {
+          var cs = document.querySelectorAll('input[type="checkbox"]');
+          for (var i = 0; i < cs.length; i++) if ((cs[i].offsetWidth || cs[i].offsetHeight) && !cs[i].checked) cs[i].click();
+        })()`);
+      }
+      await this.capturar(page, job, crear ? 'workday-cuenta.png' : 'workday-cuenta-entrar.png');
+      try {
+        const loc = page.getByRole('button', {
+          name: crear ? /create account/i : /^sign in$/i,
+        }).first();
+        if (await loc.isVisible()) {
+          await loc.click();
+          return;
+        }
+      } catch {
+        // Se cae al clic por texto.
+      }
+      await this.clickTexto(page, [crear ? 'create account' : 'sign in']);
+    };
+    const enlaceSignInDelFormulario = async (): Promise<boolean> => {
+      return page.evaluate<boolean>(`(function () {
         var as = document.querySelectorAll('a, button');
         var candidatos = [];
         for (var i = 0; i < as.length; i++) {
@@ -527,73 +505,70 @@ export class WorkdayDriver implements BrowserDriver {
         }
         for (var j = 0; j < candidatos.length; j++) {
           var cont = candidatos[j].closest('div, form, section');
-          if (cont && /already have an account/i.test(cont.textContent || '')) {
-            candidatos[j].click();
-            return true;
-          }
+          if (cont && /already have an account/i.test(cont.textContent || '')) { candidatos[j].click(); return true; }
         }
-        if (candidatos.length > 0) { candidatos[candidatos.length - 1].click(); return true; }
         return false;
       })()`);
-      await page.waitForTimeout(2500);
-      await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
-      await page.fill('input[type="password"]', datos.cuentaPassword).catch(() => undefined);
-      try {
-        const loc = page.getByRole('button', { name: /^sign in$/i }).first();
-        if (await loc.isVisible()) await loc.click();
-      } catch {
-        // Sin botón nativo: se queda lo que haya.
+    };
+
+    let altas = 0;
+    let entradas = 0;
+    for (let ronda = 0; ronda < 26; ronda++) {
+      const estado = await clasificar().catch(() => 'desconocido' as Estado);
+      if (estado === 'otro_paso') {
+        await this.esperarContenido(page);
+        return;
       }
-      for (let i = 0; i < 10; i++) {
+      if (estado === 'selector') {
+        await this.clickTexto(page, ['sign in with email']).catch(() => null);
         await page.waitForTimeout(2500);
-        if (await avanzo()) break;
+        continue;
       }
-    }
-    if (!(await avanzo())) {
-      // Workday REDIRIGE a la página de Sign In del portal cuando el
-      // alta choca con una cuenta existente. Recuperación: entrar en
-      // el portal y re-entrar en la candidatura con la sesión iniciada.
-      const enPortal = (await page.evaluate<string>(PASO_JS).catch(() => '')) === '' &&
-        /sign in with email/i.test(await this.texto(page));
-      if (enPortal) {
-        for (let i = 0; i < 12; i++) {
-          if (await page.$('input[type="password"]')) break;
-          await this.clickTexto(page, ['sign in with email']).catch(() => null);
-          await page.waitForTimeout(2000);
+      if (estado === 'formulario_crear') {
+        if (altas === 0) {
+          altas++;
+          await this.capturar(page, job, 'workday-cuenta-form.png');
+          await rellenarYEnviar(true);
+          await page.waitForTimeout(6000);
+          continue;
         }
-        await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
-        await page.fill('input[type="password"]', datos.cuentaPassword).catch(() => undefined);
-        try {
-          const loc = page.getByRole('button', { name: /^sign in$/i }).first();
-          if (await loc.isVisible()) await loc.click();
-        } catch {
-          await this.clickTexto(page, ['sign in']).catch(() => null);
-        }
-        for (let i = 0; i < 10; i++) {
+        // El alta no avanzó (la cuenta ya existía): pasar a entrar
+        // por el enlace del propio formulario.
+        if (await enlaceSignInDelFormulario()) {
           await page.waitForTimeout(2500);
-          if (!(await page.$('input[type="password"]'))) break;
+          continue;
         }
-        // Re-entrar en la candidatura con la sesión ya iniciada.
-        await this.abrirAsistente(page, job);
+        await page.waitForTimeout(2000);
+        continue;
       }
-    }
-    if (!(await avanzo())) {
-      // Última tolerancia: si el asistente está presente (hay stepper)
-      // y la sesión está iniciada (sin enlace «Sign In» en cabecera),
-      // el motor de pasos puede avanzar desde la pantalla de cuenta.
-      const pasoNow = await page.evaluate<string>(PASO_JS).catch(() => '');
-      const cabecera = await this.texto(page);
-      const sesionIniciada = pasoNow !== '' && !/^sign in$/im.test(cabecera.split('\n')[2] ?? '');
-      if (!sesionIniciada) {
-        const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
-        await this.capturar(page, job, 'workday-cuenta-error.png');
-        throw new AnomaliaEnvio(
-          'formulario_cambiado',
-          `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
-        );
+      if (estado === 'formulario_entrar') {
+        // Verificación de correo: pantalla de código tras el alta.
+        const t = await this.texto(page);
+        if (/verify your email|verification code|check your email|confirm your email/i.test(t)) {
+          await this.capturar(page, job, 'workday-verificacion.png');
+          throw new AnomaliaEnvio(
+            'captcha_mfa',
+            'Workday pide verificar el correo electrónico para crear la cuenta: el código llega a tu email y hay que introducirlo en el asistente',
+          );
+        }
+        if (entradas === 0) {
+          entradas++;
+          await rellenarYEnviar(false);
+          await page.waitForTimeout(6000);
+          continue;
+        }
+        await page.waitForTimeout(2000);
+        continue;
       }
+      // 'cargando' o 'desconocido': esperar a que pinte.
+      await page.waitForTimeout(2500);
     }
-    await this.esperarContenido(page);
+    const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
+    await this.capturar(page, job, 'workday-cuenta-error.png');
+    throw new AnomaliaEnvio(
+      'formulario_cambiado',
+      `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 240) || (await this.texto(page)).slice(0, 240)}`,
+    );
   }
 
   // --------------------------------------------------------------------
