@@ -523,6 +523,9 @@ export class WorkdayDriver implements BrowserDriver {
         return;
       }
       if (estado === 'selector') {
+        if (ronda === 0 || ronda === 3) {
+          await this.capturar(page, job, `workday-selector-r${ronda}.png`);
+        }
         await this.clickTexto(page, ['sign in with email']).catch(() => null);
         await page.waitForTimeout(2500);
         continue;
