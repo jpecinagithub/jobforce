@@ -12,6 +12,8 @@ import {
   checkUrlAlive,
   checkUrlStatus,
   checkUrlStatusDetailed,
+  extractCompany,
+  jnjCareersJobUrl,
   workdayCxsJobUrl,
   looksLikePersonProfile,
   extractApplicationContact,
@@ -582,5 +584,142 @@ describe('Breezy HR (cierre por contenido)', () => {
       throw new Error('boom');
     }) as typeof fetch;
     assert.equal(await checkUrlStatus(BREEZY), 'unknown');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JnJ: la CXS del tenant jj da 403; manda careers.jnj.com (Phenom)
+// ---------------------------------------------------------------------------
+
+describe('JnJ (CXS cerrada → careers.jnj.com)', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const JJ =
+    'https://jj.wd5.myworkdayjobs.com/en-US/JJ/job/Lead-GS-Finance-CFM-Innovative-Medicine_R-101032';
+
+  it('jnjCareersJobUrl deriva la URL del sitio desde el req del slug', () => {
+    assert.equal(jnjCareersJobUrl(JJ), 'https://www.careers.jnj.com/en/jobs/r-101032/');
+    assert.equal(jnjCareersJobUrl('https://gsk.wd5.myworkdayjobs.com/en-US/GSKCareers/job/X_1'), null);
+  });
+
+  it('CXS 403 + sitio 404 → broken vía jnj_careers', async () => {
+    globalThis.fetch = (async (url: unknown) =>
+      new Response(null, {
+        status: String(url).includes('careers.jnj.com') ? 404 : 403,
+      })) as typeof fetch;
+    assert.deepEqual(await checkUrlStatusDetailed(JJ), { status: 'broken', via: 'jnj_careers' });
+  });
+
+  it('CXS 403 + sitio 200 → alive vía jnj_careers', async () => {
+    globalThis.fetch = (async (url: unknown) =>
+      new Response(null, {
+        status: String(url).includes('careers.jnj.com') ? 200 : 403,
+      })) as typeof fetch;
+    assert.equal(await checkUrlStatus(JJ), 'alive');
+  });
+
+  it('CXS 200 → alive vía workday_api (sin tocar el sitio)', async () => {
+    let calls = 0;
+    globalThis.fetch = (async (url: unknown) => {
+      calls++;
+      assert.ok(String(url).includes('/wday/cxs/'), 'solo debe llamarse a la CXS');
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    assert.deepEqual(await checkUrlStatusDetailed(JJ), { status: 'alive', via: 'workday_api' });
+    assert.equal(calls, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractCompany
+// ---------------------------------------------------------------------------
+
+describe('extractCompany', () => {
+  it('campo Company del texto de Exa, con pulido de tenant', () => {
+    assert.equal(
+      extractCompany({
+        title: 'Finance manager - Logo - Myworkdayjobs.com',
+        url: 'https://dssmith.wd3.myworkdayjobs.com/en-US/careers/job/Finance-manager_R-15037',
+        text: '# Finance manager at Dssmith\n\n- **Company:** Dssmith\n- **Location:** Tallinn',
+      }),
+      'DS Smith',
+    );
+  });
+
+  it('patrón «… at X» del título', () => {
+    assert.equal(
+      extractCompany({
+        title: 'Finance Analyst - North America Deliver at Kenvue',
+        url: 'https://kenvue.wd5.myworkdayjobs.com/en-US/kenvue/job/Finance-Analyst_1',
+      }),
+      'Kenvue',
+    );
+    assert.equal(
+      extractCompany({
+        title: 'Lead GS Finance CFM Innovative Medicine at Jj',
+        url: 'https://jj.wd5.myworkdayjobs.com/en-US/JJ/job/Lead_R-101032',
+      }),
+      'J&J',
+    );
+    assert.equal(
+      extractCompany({
+        title: 'School Business Manager – Established Primary School at Marchant Recruitment',
+        url: 'https://example.com/job/1',
+      }),
+      'Marchant Recruitment',
+    );
+  });
+
+  it('segmento inicial «Empresa - Puesto»', () => {
+    assert.equal(
+      extractCompany({ title: 'Harmattan AI - Finance Manager MEA', url: 'https://example.com/j/2' }),
+      'Harmattan AI',
+    );
+  });
+
+  it('tenant del ATS cuando el título no dice nada', () => {
+    assert.equal(
+      extractCompany({
+        title: 'IT Specialist - Myworkdayjobs.com',
+        url: 'https://jotun.wd3.myworkdayjobs.com/en-US/Jotun_careers/job/IT-Specialist_R10373',
+      }),
+      'Jotun',
+    );
+    assert.equal(
+      extractCompany({
+        title: 'Finance Manager Latam',
+        url: 'https://immersive-technologies.breezy.hr/p/20be2cb6f85a-finance-manager-latam',
+      }),
+      'Immersive Technologies',
+    );
+  });
+
+  it('author basura NO es empresa; «X Careers» sí', () => {
+    assert.equal(
+      extractCompany({ title: 'Finance Manager', url: 'https://example.com/j/3', author: 'Publicada el' }),
+      null,
+    );
+    assert.equal(
+      extractCompany({
+        title: 'Senior Finance Manager, MTO, Beerse',
+        url: 'https://www.careers.jnj.com/en/jobs/r-106067/x/',
+        author: 'Johnson, Johnson Careers',
+      }),
+      'Johnson & Johnson',
+    );
+  });
+
+  it('sin señal → null (ReliefWeb no es la empresa)', () => {
+    assert.equal(
+      extractCompany({
+        title: 'Finance Manager - Syrian Arab Republic | ReliefWeb',
+        url: 'https://reliefweb.int/job/4233466/finance-manager',
+      }),
+      null,
+    );
   });
 });

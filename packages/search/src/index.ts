@@ -403,6 +403,144 @@ const TRACKING_PARAMS = new Set(['fbclid', 'gclid', 'msclkid']);
  *
  * NUNCA lanza: ante una URL inválida devuelve la entrada tal cual.
  */
+/**
+ * Nombres visibles de tenants ATS conocidos (la forma del slug no basta:
+ * «jj» es J&J, «gsk» es GSK, «djeholdings» es Edelman/DJE Holdings…).
+ */
+const TENANT_DISPLAY: Record<string, string> = {
+  gsk: 'GSK',
+  jj: 'J&J',
+  jnj: 'J&J',
+  johnsonjohnson: 'Johnson & Johnson',
+  dssmith: 'DS Smith',
+  scj: 'SC Johnson',
+  djeholdings: 'Edelman',
+  alsglobal: 'ALS Global',
+  cancerresearchuk: 'Cancer Research UK',
+  worldvision: 'World Vision',
+  livenation: 'Live Nation',
+  schreiberfoods: 'Schreiber Foods',
+  fluenceenergy: 'Fluence Energy',
+};
+
+/** Nombre presentable a partir de un slug de tenant: mapa conocido o Title Case por guiones. */
+export function tenantDisplayName(slug: string): string {
+  const key = slug.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (TENANT_DISPLAY[key]) return TENANT_DISPLAY[key];
+  return slug
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+/** Sitios que son el PORTAL, no la empresa (nunca son la respuesta). */
+const PORTAL_NAMES = new Set([
+  'reliefweb', 'myworkdayjobs.com', 'workday', 'linkedin', 'indeed', 'glassdoor',
+  'devex', 'unjobs', 'infojobs', 'jobera', 'tealhq', 'greenhouse', 'lever', 'ashby',
+]);
+
+/** Palabras de rol: si un segmento del título las contiene, es el puesto, no la empresa. */
+const JOB_SEGMENT_RE =
+  /(manager|director|analyst|specialist|controller|lead|head|coordinator|officer|accountant|finance|financial|consultant|engineer|developer|assistant|executive|administrator|partner|supervisor|clerk|auditor|planner|strategist|designer|recruiter|intern|chef|nurse|teacher|manager)/i;
+
+/** Si el candidato (sin espacios ni signos) es un tenant conocido, su nombre visible. */
+function polishCompany(candidate: string): string {
+  const squash = candidate.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return TENANT_DISPLAY[squash] ?? candidate;
+}
+
+/** Candidato a empresa válido: sin dominios, sin portales conocidos, longitud razonable. */
+function plausibleCompany(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const name = raw.replace(/\s+/g, ' ').replace(/[\s|,–-]+$/g, '').trim();
+  if (name.length < 2 || name.length > 60) return null;
+  if (/\.(com|org|net|io|hr|jobs|es|int)\b/i.test(name)) return null;
+  if (PORTAL_NAMES.has(name.toLowerCase())) return null;
+  return name;
+}
+
+/** Empresa desde el host cuando es un ATS con tenant: Workday, Breezy, Greenhouse, Lever, Ashby, SmartRecruiters, Teamtailor, Personio. */
+function companyFromAtsHost(url: string): string | null {
+  let host: string;
+  let path: string;
+  try {
+    const u = new URL(url);
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return null;
+  }
+  const sub = host.split('.')[0];
+  if (host.endsWith('.myworkdayjobs.com') && sub) return tenantDisplayName(sub);
+  if (host.endsWith('.breezy.hr') && sub) return tenantDisplayName(sub);
+  if (host.endsWith('.teamtailor.com') && sub && sub !== 'www') return tenantDisplayName(sub);
+  if (host.endsWith('.personio.com') || host.endsWith('.jobs.personio.com')) {
+    if (sub && sub !== 'www') return tenantDisplayName(sub);
+  }
+  const seg = path.split('/').filter(Boolean);
+  if (host === 'boards.greenhouse.io' || host === 'job-boards.greenhouse.io') {
+    return seg[0] ? tenantDisplayName(seg[0]) : null;
+  }
+  if (host === 'jobs.lever.co') return seg[0] ? tenantDisplayName(seg[0]) : null;
+  if (host === 'jobs.ashbyhq.com') return seg[0] ? tenantDisplayName(seg[0]) : null;
+  if (host === 'jobs.smartrecruiters.com' || host === 'careers.smartrecruiters.com') {
+    return seg[0] ? tenantDisplayName(seg[0]) : null;
+  }
+  return null;
+}
+
+/**
+ * Empresa de una oferta a partir de lo que trae Exa. La ingesta guardaba
+ * `author` como empresa y eso era casi siempre null (92/104) o basura
+ * («Publicada el», nombres de personas, «Johnson, Johnson Careers»).
+ * Orden de fiabilidad:
+ *  1. Campo «Company:»/«Organization:» del texto completo de Exa.
+ *  2. Patrón «… at X» al final del título (formato habitual de Exa).
+ *  3. Segmento inicial del título «Empresa - Puesto» si no parece un rol.
+ *  4. Tenant del ATS en la URL (Workday/Breezy/Greenhouse/…).
+ *  5. `author` SOLO si es la página «X Careers» de la empresa.
+ * Si nada cuadra, null (mejor «—» que un nombre inventado).
+ */
+export function extractCompany(input: {
+  title?: string | null;
+  url: string;
+  text?: string | null;
+  author?: string | null;
+}): string | null {
+  // 1) Campo explícito en el texto.
+  if (input.text) {
+    const m = input.text.match(
+      /(?:^|\n)[-\s*]*\*\*(?:Company|Organization|Organisation|Employer|Empresa)\*\*:?\s*\**\s*([^\n*]{2,60})/i,
+    );
+    const fromField = plausibleCompany(m?.[1]);
+    if (fromField) return polishCompany(fromField);
+  }
+  const title = (input.title ?? '').replace(/\s+/g, ' ').trim();
+  // 2) «… at X» final.
+  const at = title.match(/\bat\s+([^|–—-]{2,60})$/i);
+  const fromAt = plausibleCompany(at?.[1]);
+  if (fromAt) {
+    // Un token único puede ser el slug del tenant («at Jj», «at Gsk»).
+    return polishCompany(fromAt.includes(' ') ? fromAt : tenantDisplayName(fromAt));
+  }
+  // 3) «Empresa - Puesto …»: primer segmento sin palabras de rol.
+  const firstSeg = title.split(/\s+[-–—]\s+/)[0];
+  if (firstSeg && firstSeg !== title && !JOB_SEGMENT_RE.test(firstSeg)) {
+    const fromSeg = plausibleCompany(firstSeg);
+    if (fromSeg && fromSeg.split(' ').length <= 4) return polishCompany(fromSeg);
+  }
+  // 4) Tenant del ATS.
+  const fromHost = companyFromAtsHost(input.url);
+  if (fromHost) return plausibleCompany(fromHost) ?? fromHost;
+  // 5) Author «X Careers».
+  if (input.author && /careers/i.test(input.author)) {
+    const cleaned = plausibleCompany(input.author.replace(/\bcareers\b/gi, ''));
+    if (cleaned) return polishCompany(cleaned);
+  }
+  return null;
+}
+
 export function canonicalUrl(url: string): string {
   try {
     const u = new URL(url);
@@ -496,8 +634,8 @@ async function probeUrl(url: string, method: 'HEAD' | 'GET'): Promise<ProbeOutco
 const isGoneStatus = (status: number): boolean => status === 404 || status === 410;
 const isDnsGone = (err: unknown): boolean => errorCodes(err).has('ENOTFOUND');
 
-/** Vía que produjo el veredicto: API del portal, contenido de la página o sonda HTTP genérica. */
-export type UrlCheckVia = 'workday_api' | 'breezy_content' | 'http';
+/** Vía que produjo el veredicto: API del portal, sitio del empleador, contenido o sonda HTTP genérica. */
+export type UrlCheckVia = 'workday_api' | 'breezy_content' | 'jnj_careers' | 'http';
 
 export interface UrlCheckDetail {
   status: UrlStatus;
@@ -618,6 +756,26 @@ function isBreezyUrl(url: string): boolean {
  * evidencia doble y del mismo signo; cualquier bloqueo anti-bots o
  * fallo transitorio queda en `unknown`. Nunca lanza.
  */
+/**
+ * URL del sitio de empleo de Johnson & Johnson (Phenom) para una oferta
+ * de su tenant de Workday, o null si no aplica. El tenant «jj» tiene la
+ * CXS cerrada (403 S22 a todo el mundo) en ALGUNAS ofertas, pero su
+ * sitio público sí discrimina: /en/jobs/r-{req}/ devuelve 404 «Page Not
+ * Found» si la oferta ya no existe y 302/200 si sigue viva (verificado
+ * 2026-10-21 con R-101032, muerta, frente a R-105619, viva).
+ */
+export function jnjCareersJobUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (!u.hostname.startsWith('jj.') || !u.hostname.endsWith('.myworkdayjobs.com')) return null;
+    const m = u.pathname.match(/_R-(\d+)/i);
+    if (!m) return null;
+    return `https://www.careers.jnj.com/en/jobs/r-${m[1]}/`;
+  } catch {
+    return null;
+  }
+}
+
 export async function checkUrlStatusDetailed(url: string): Promise<UrlCheckDetail> {
   if (isBreezyUrl(url)) return checkBreezyStatus(url);
   const cxs = workdayCxsJobUrl(url);
@@ -626,6 +784,17 @@ export async function checkUrlStatusDetailed(url: string): Promise<UrlCheckDetai
     if (api.kind === 'status') {
       if (isGoneStatus(api.status)) return { status: 'broken', via: 'workday_api' };
       if (api.status < 400) return { status: 'alive', via: 'workday_api' };
+    }
+    // CXS no concluyente (p. ej. el 403 del tenant de JnJ): para JnJ
+    // manda su sitio de empleo, que sí distingue vivas de cerradas.
+    const jnj = jnjCareersJobUrl(url);
+    if (jnj) {
+      const site = await probeUrl(jnj, 'GET');
+      if (site.kind === 'status') {
+        if (isGoneStatus(site.status)) return { status: 'broken', via: 'jnj_careers' };
+        if (site.status < 400) return { status: 'alive', via: 'jnj_careers' };
+      }
+      return { status: 'unknown', via: 'jnj_careers' };
     }
     return { status: 'unknown', via: 'workday_api' };
   }

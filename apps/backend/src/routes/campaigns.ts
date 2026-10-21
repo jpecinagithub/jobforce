@@ -34,6 +34,7 @@ import {
   canonicalUrl,
   checkUrlStatusDetailed,
   createExaClient,
+  extractCompany,
   EXA_COST_ESTIMATE_PER_SEARCH_USD,
   generateQueries,
   looksLikePersonProfile,
@@ -496,7 +497,15 @@ export async function ejecutarBusquedaCampana(
               canon,
               result.url,
               result.title ?? null,
-              result.author ?? null,
+              // Empresa: extracción real (campo del texto, «… at X» del
+              // título, tenant del ATS). El `author` de Exa era casi
+              // siempre null o basura («Publicada el») — ver extractCompany.
+              extractCompany({
+                title: result.title,
+                url: result.url,
+                text: result.text,
+                author: result.author,
+              }),
               result.publishedDate ?? null,
               JSON.stringify(result.highlights ?? []),
               JSON.stringify(result),
