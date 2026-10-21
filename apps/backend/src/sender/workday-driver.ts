@@ -509,45 +509,53 @@ export class WorkdayDriver implements BrowserDriver {
         'Workday pide verificar el correo electrónico para crear la cuenta: el código llega a tu email y hay que introducirlo en el asistente',
       );
     }
-    if (/already (exists|registered)|account.*exist|email.*in use/i.test(texto)) {
-      // La cuenta ya existía: entrar con las mismas credenciales.
-      await this.clickTexto(page, ['sign in']).catch(() => null);
-      await page.waitForTimeout(2000);
-      await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
-      await page.fill('input[type="password"]', datos.cuentaPassword).catch(() => undefined);
-      await this.clickTexto(page, ['sign in']);
-      await page.waitForTimeout(5000);
-      texto = await this.texto(page);
-    }
-    const paso = await page.evaluate<string>(PASO_JS).catch(() => '');
-    if (/create account|sign in/i.test(paso) || (await page.$('input[type="password"]'))) {
-      // La cuenta puede YA existir (creada en una pasada anterior):
-      // entrar con las mismas credenciales antes de rendirse.
-      await this.clickTexto(page, ['sign in']).catch(() => null);
+    const avanzo = async (): Promise<boolean> => {
+      const p = await page.evaluate<string>(PASO_JS).catch(() => '');
+      return p !== '' && !/create account|sign in/i.test(p);
+    };
+    if (!(await avanzo())) {
+      // La cuenta YA existe (creada en una pasada anterior): entrar con
+      // las mismas credenciales pulsando el enlace DEL FORMULARIO
+      // («Already have an account? Sign In») — el de la cabecera saca
+      // del asistente a la página del portal (verificado en vivo).
+      await page.evaluate(`(function () {
+        var as = document.querySelectorAll('a, button');
+        var candidatos = [];
+        for (var i = 0; i < as.length; i++) {
+          var t = (as[i].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          if (t === 'sign in') candidatos.push(as[i]);
+        }
+        for (var j = 0; j < candidatos.length; j++) {
+          var cont = candidatos[j].closest('div, form, section');
+          if (cont && /already have an account/i.test(cont.textContent || '')) {
+            candidatos[j].click();
+            return true;
+          }
+        }
+        if (candidatos.length > 0) { candidatos[candidatos.length - 1].click(); return true; }
+        return false;
+      })()`);
       await page.waitForTimeout(2500);
       await page.fill(emailSel, datos.cuentaEmail).catch(() => undefined);
       await page.fill('input[type="password"]', datos.cuentaPassword).catch(() => undefined);
       try {
-        const loc = page.getByRole('button', { name: /sign in/i }).first();
+        const loc = page.getByRole('button', { name: /^sign in$/i }).first();
         if (await loc.isVisible()) await loc.click();
       } catch {
-        await this.clickTexto(page, ['sign in']).catch(() => null);
+        // Sin botón nativo: se queda lo que haya.
       }
       for (let i = 0; i < 10; i++) {
         await page.waitForTimeout(2500);
-        const p2 = await page.evaluate<string>(PASO_JS).catch(() => '');
-        if (p2 && !/create account|sign in/i.test(p2)) break;
-        if (!(await page.$('input[type="password"]'))) break;
+        if (await avanzo()) break;
       }
-      const paso2 = await page.evaluate<string>(PASO_JS).catch(() => '');
-      if (/create account|sign in/i.test(paso2) || (await page.$('input[type="password"]'))) {
-        const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
-        await this.capturar(page, job, 'workday-cuenta-error.png');
-        throw new AnomaliaEnvio(
-          'formulario_cambiado',
-          `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
-        );
-      }
+    }
+    if (!(await avanzo())) {
+      const errores = await page.evaluate<string[]>(ERRORES_JS).catch(() => []);
+      await this.capturar(page, job, 'workday-cuenta-error.png');
+      throw new AnomaliaEnvio(
+        'formulario_cambiado',
+        `Workday no aceptó la cuenta: ${errores.join(' · ').slice(0, 260) || texto.slice(0, 260)}`,
+      );
     }
     await this.esperarContenido(page);
   }
