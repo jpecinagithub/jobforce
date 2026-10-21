@@ -359,6 +359,34 @@ export class WorkableDriver implements BrowserDriver {
     const paisTexto = await this.paisDelPuesto(page);
     const enZonaDerecho = ZONA_DERECHO.some((z) => paisTexto.includes(z));
 
+    // --- Adjuntos PRIMERO --------------------------------------------------
+    // Al subir el CV, Workable lo parsea en su servidor («autofill») y
+    // RE-RENDERIZA el formulario segundos después: desharía cualquier
+    // campo ya rellenado (visto en vivo con el radio «Right to Work»).
+    // Por eso: primero las subidas, espera a que el autofill se
+    // asiente, y el resto se rellena sobre el DOM final.
+    let uploadsOk = false;
+    for (const c of campos) {
+      if (c.tipo !== 'file') continue;
+      const e = `${c.etiqueta} ${c.grupo} ${c.sel}`.toLowerCase();
+      const esCarta = /cover|letter|carta/.test(e);
+      try {
+        await page.setInputFiles(c.sel, esCarta ? job.cartaPath : job.cvPath);
+        if (!esCarta) uploadsOk = true;
+        tocados++;
+      } catch {
+        // Input con envoltorio propio; si es el CV y falla, se anota abajo.
+      }
+    }
+    if (!uploadsOk) {
+      throw new AnomaliaEnvio(
+        'formulario_cambiado',
+        'no se pudo subir el CV al formulario de Workable (input de fichero no operable)',
+      );
+    }
+    await page.waitForTimeout(4500);
+    campos = await page.evaluate<CampoW[]>(DESCUBRIR_JS);
+
     // --- Campos estándar por id/nombre/etiqueta -------------------------
     const rellenados = new Set<string>();
     for (const c of campos) {
@@ -388,32 +416,7 @@ export class WorkableDriver implements BrowserDriver {
       }
     }
 
-    // --- Adjuntos --------------------------------------------------------
-    let uploadsOk = false;
-    for (const c of campos) {
-      if (c.tipo !== 'file') continue;
-      const e = `${c.etiqueta} ${c.grupo} ${c.sel}`.toLowerCase();
-      const esCarta = /cover|letter|carta/.test(e);
-      try {
-        await page.setInputFiles(c.sel, esCarta ? job.cartaPath : job.cvPath);
-        if (!esCarta) uploadsOk = true;
-        tocados++;
-      } catch {
-        // Input con envoltorio propio; si es el CV y falla, se anota abajo.
-      }
-    }
-    if (!uploadsOk) {
-      throw new AnomaliaEnvio(
-        'formulario_cambiado',
-        'no se pudo subir el CV al formulario de Workable (input de fichero no operable)',
-      );
-    }
-
     // --- Radios (preguntas Sí/No y similares) ----------------------------
-    // Re-descubrimiento: la subida del CV dispara el «autofill» de
-    // Workable y la página RE-RENDERIZA el formulario con ids nuevos;
-    // los selectores anteriores quedan obsoletos (visto en vivo).
-    campos = await page.evaluate<CampoW[]>(DESCUBRIR_JS);
     const gruposRadio = new Map<string, CampoW[]>();
     for (const c of campos) {
       if (c.tipo !== 'radio') continue;
@@ -435,21 +438,34 @@ export class WorkableDriver implements BrowserDriver {
           // ni siquiera superan la accionabilidad, y sin marcar el
           // formulario rechaza el envío: «Please select one of these
           // options»). Se verifica el checked tras una espera breve.
-          let marcado = await page
-            .evaluate<boolean>(`(function () {
-              var el = document.querySelector('${elegida.sel}');
-              if (!el) return false;
-              el.click();
-              return true;
-            })()`)
-            .catch(() => false);
-          if (marcado) {
-            await page.waitForTimeout(500);
-            marcado = await page
+          const intentarMarcar = async (sel: string): Promise<boolean> => {
+            const clic = await page
+              .evaluate<boolean>(`(function () {
+                var el = document.querySelector('${sel}');
+                if (!el) return false;
+                el.click();
+                return true;
+              })()`)
+              .catch(() => false);
+            if (!clic) return false;
+            await page.waitForTimeout(600);
+            return page
               .evaluate<boolean>(
-                `(function () { var el = document.querySelector('${elegida.sel}'); return !!el && el.checked === true; })()`,
+                `(function () { var el = document.querySelector('${sel}'); return !!el && el.checked === true; })()`,
               )
               .catch(() => false);
+          };
+          let marcado = await intentarMarcar(elegida.sel);
+          if (!marcado) {
+            // El autofill puede aterrizar tarde y re-renderizar otra
+            // vez: re-descubrir el grupo y reintentar una sola vez.
+            await page.waitForTimeout(1800);
+            const frescos = await page.evaluate<CampoW[]>(DESCUBRIR_JS);
+            const fresca = frescos.find(
+              (o) =>
+                o.tipo === 'radio' && o.name === elegida.name && objetivo.test(o.etiqueta.trim()),
+            );
+            if (fresca) marcado = await intentarMarcar(fresca.sel);
           }
           if (!marcado) {
             throw new AnomaliaEnvio(
