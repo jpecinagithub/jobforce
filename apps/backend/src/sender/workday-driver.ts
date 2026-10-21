@@ -339,6 +339,21 @@ export class WorkdayDriver implements BrowserDriver {
     return false;
   }
 
+  /** clickTexto con reintentos: la SPA pinta el botón con retraso variable. */
+  private async esperarClickTexto(
+    page: PwPage,
+    textos: string[],
+    intentos = 10,
+    esperaMs = 2000,
+  ): Promise<string | null> {
+    for (let i = 0; i < intentos; i++) {
+      const r = await this.clickTexto(page, textos).catch(() => null);
+      if (r) return r;
+      await page.waitForTimeout(esperaMs);
+    }
+    return null;
+  }
+
   private async texto(page: PwPage): Promise<string> {
     return page.evaluate<string>(`(document.body.innerText || '').slice(0, 9000)`).catch(() => '');
   }
@@ -358,7 +373,7 @@ export class WorkdayDriver implements BrowserDriver {
     this.paisPuesto = paisDesdeTexto(texto);
     // Cookies: «Decline» no tapa nada y no acepta seguimiento.
     await this.clickTexto(page, ['decline', 'accept cookies']).catch(() => null);
-    const apply = await this.clickTexto(page, ['apply', 'apply now']);
+    const apply = await this.esperarClickTexto(page, ['apply', 'apply now']);
     if (!apply) throw new AnomaliaEnvio('formulario_cambiado', 'no se encontró el botón Apply de Workday');
     await page.waitForTimeout(2500);
     const auto = await this.clickTexto(page, ['autofill with resume']);
@@ -379,11 +394,15 @@ export class WorkdayDriver implements BrowserDriver {
     if (/no longer accepting|position (is|has been) closed|job (is|has been) filled/i.test(texto)) {
       return { abierta: false, detalle: 'Workday muestra la oferta cerrada' };
     }
-    const apply = await this.clickTexto(page, ['apply', 'apply now']);
+    const apply = await this.esperarClickTexto(page, ['apply', 'apply now']);
     if (!apply) return { abierta: false, detalle: 'sin botón Apply visible en Workday' };
-    await page.waitForTimeout(2500);
-    const panel = await this.texto(page);
-    const ok = /start your application|autofill with resume|apply manually/i.test(panel);
+    let panel = '';
+    let ok = false;
+    for (let i = 0; i < 5 && !ok; i++) {
+      await page.waitForTimeout(1800);
+      panel = await this.texto(page);
+      ok = /start your application|autofill with resume|apply manually/i.test(panel);
+    }
     return {
       abierta: ok,
       detalle: ok ? 'panel de aplicación de Workday visible' : 'el panel de aplicación no se abrió',
