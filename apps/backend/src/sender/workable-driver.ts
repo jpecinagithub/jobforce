@@ -113,9 +113,14 @@ const DESCUBRIR_JS = `(function () {
     var grupo = '';
     if (tipo === 'radio') {
       var fs = e.closest('fieldset');
-      if (fs && fs.parentElement) {
-        var resto = (fs.parentElement.textContent || '').split(fs.textContent || '').join('').trim();
-        if (resto) grupo = resto.replace(/^\\*\\s*/, '');
+      if (fs) {
+        var textoFs = fs.textContent || '';
+        var nodo = fs;
+        for (var u = 0; u < 3 && nodo.parentElement; u++) {
+          nodo = nodo.parentElement;
+          var resto = (nodo.textContent || '').split(textoFs).join('').trim();
+          if (resto.length >= 3) { grupo = resto.replace(/^\\*\\s*/, ''); break; }
+        }
       }
       if (!grupo) grupo = etiqueta;
     } else {
