@@ -31,3 +31,4 @@ infra/docker-compose.override.yml
 
 # Tipos generados por Next.js
 next-env.d.ts
+paso*.png

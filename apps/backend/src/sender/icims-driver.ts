@@ -180,7 +180,7 @@ export class IcimsDriver implements BrowserDriver {
   readonly portal = 'icims';
   private browser: PwBrowser | null = null;
   private page: PwPage | null = null;
-  private forwarder: Awaited<ReturnType<typeof startForwarder>> = null;
+  private forwarder: (() => void) | null = null;
 
   private async pageActiva(job: DriverJob): Promise<PwPage> {
     if (this.page) return this.page;
@@ -587,7 +587,7 @@ export class IcimsDriver implements BrowserDriver {
       if (await this.pasoAcceso(page, job)) continue;
       if (await this.pasoCrearCuenta(page, job)) continue;
       const antes = totalCampos;
-      totalCampos += await this.rellenarPaso(page, job, job.cvPath, job.coverLetterPath);
+      totalCampos += await this.rellenarPaso(page, job, job.cvPath, job.cartaPath);
       if (totalCampos > antes) subioAlgo = subioAlgo || true;
       const frame = await this.superficie(page);
       const camposAhora = await frame
