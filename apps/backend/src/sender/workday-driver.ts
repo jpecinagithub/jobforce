@@ -417,13 +417,15 @@ export class WorkdayDriver implements BrowserDriver {
     if (!datos?.cuentaEmail || !datos?.cuentaPassword) {
       throw new AnomaliaEnvio('datos_ausentes', 'sin credenciales de cuenta para Workday');
     }
-    // Workday muestra primero un selector social: el formulario de
-    // email aparece al pulsar «Sign in with email».
-    await this.clickTexto(page, ['sign in with email']).catch(() => null);
-    // Esperar a que el formulario de cuenta renderice.
-    for (let i = 0; i < 10; i++) {
+    // Workday muestra primero un selector social que tarda ~10 s en
+    // pintarse: el formulario de email aparece al pulsar «Sign in with
+    // email». El clic se reintenta en cada ronda hasta que el campo de
+    // contraseña existe (una sola pulsación temprana no coincide nunca
+    // con el render — verificado en vivo, CLR 2026-10-21).
+    for (let i = 0; i < 14; i++) {
       if (await page.$('input[type="password"]')) break;
-      await page.waitForTimeout(1500);
+      await this.clickTexto(page, ['sign in with email']).catch(() => null);
+      await page.waitForTimeout(2000);
     }
     let texto = await this.texto(page);
     // Si el formulario está en modo Sign In (1 contraseña) y hay un

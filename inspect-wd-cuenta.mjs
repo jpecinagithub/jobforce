@@ -24,6 +24,11 @@ const clickTxt = (t) =>
 console.log('apply:', await clickTxt('apply'));
 await page.waitForTimeout(3000);
 console.log('autofill:', await clickTxt('autofill with resume'));
+await page.waitForTimeout(4000);
+console.log('sign-in-email:', await clickTxt('sign in with email'));
+await page.waitForTimeout(2500);
+console.log('create-account-toggle:', await clickTxt('create account'));
+await page.waitForTimeout(2500);
 for (let i = 0; i < 10; i++) {
   await page.waitForTimeout(2500);
   const info = await page.evaluate(`(function () {
