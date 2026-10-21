@@ -322,51 +322,117 @@ const STOPWORDS: Record<string, string[]> = {
   nl: ['het', 'een', 'van', 'dat', 'die', 'zijn', 'voor', 'met', 'aan', 'tot', 'ook', 'als', 'bij', 'naar', 'je', 'wij', 'er', 'om', 'op'],
   it: ['il', 'lo', 'che', 'una', 'per', 'con', 'del', 'sono', 'delle', 'dei', 'gli', 'nella', 'nel', 'alla', 'come', 'si', 'da', 'su'],
   pt: ['os', 'as', 'em', 'do', 'da', 'dos', 'das', 'para', 'com', 'uma', 'que', 'por', 'ao', 'são', 'como', 'mais', 'na', 'no', 'nas', 'nos'],
+  et: ['ja', 'ning', 'on', 'et', 'kui', 'ka', 'ei', 'see', 'seda', 'voi', 'kes', 'mis', 'aga', 'siis', 'vaga', 'sul', 'sind', 'sinu', 'oma', 'selle', 'sellest', 'juures', 'kohta', 'enam', 'veel', 'juba', 'kaasa', 'olema', 'meie', 'teie', 'nende'],
+  pl: ['i', 'w', 'z', 'na', 'do', 'sie', 'nie', 'to', 'jest', 'sa', 'dla', 'o', 'po', 'jak', 'ale', 'czy', 'tez', 'przez', 'przy', 'oraz', 'juz', 'tylko', 'bardzo', 'ktory', 'ktora', 'ktore', 'bedzie', 'moze', 'od', 'za', 'ze', 'co', 'tak'],
+  cs: ['je', 'se', 'na', 'a', 'v', 'z', 'do', 'pro', 's', 'k', 'o', 'po', 'ale', 'nebo', 'pokud', 'ktery', 'ktera', 'ktere', 'jsme', 'jsou', 'bude', 'byl', 'byla', 'take', 'jiz', 'velmi', 'nase', 'nasi'],
+  sk: ['je', 'sa', 'na', 'a', 'v', 'z', 'do', 'pre', 's', 'k', 'o', 'po', 'ale', 'alebo', 'ak', 'ktory', 'ktora', 'ktore', 'sme', 'su', 'bude', 'bol', 'bola', 'tiez', 'velmi', 'nasa'],
+  hu: ['hogy', 'nem', 'van', 'es', 'meg', 'el', 'ki', 'csak', 'mint', 'ahol', 'amely', 'nagyon', 'illetve', 'utan', 'kozott', 'amikor', 'akik', 'sajat', 'ezzel', 'azert'],
+  ro: ['si', 'in', 'de', 'la', 'un', 'o', 'pe', 'cu', 'pentru', 'care', 'mai', 'din', 'este', 'sunt', 'nu', 'sa', 'cel', 'cea', 'prin', 'dupa', 'foarte', 'noastre', 'nostru'],
+  sv: ['och', 'att', 'det', 'som', 'ar', 'en', 'ett', 'med', 'till', 'av', 'den', 'har', 'ska', 'vara', 'inte', 'om', 'pa', 'for', 'nar', 'efter', 'over', 'mycket', 'hos'],
+  da: ['og', 'at', 'det', 'som', 'er', 'en', 'et', 'med', 'til', 'af', 'den', 'har', 'skal', 'vaere', 'ikke', 'om', 'pa', 'for', 'nar', 'efter', 'over', 'meget', 'hos'],
+  no: ['og', 'at', 'det', 'som', 'er', 'en', 'et', 'med', 'til', 'av', 'den', 'har', 'skal', 'vaere', 'ikke', 'om', 'pa', 'for', 'nar', 'etter', 'over', 'meget', 'hos'],
+  fi: ['ja', 'on', 'etta', 'kun', 'myos', 'ei', 'se', 'tama', 'nama', 'ovat', 'olla', 'joka', 'jotka', 'mutta', 'jos', 'niin', 'kuin', 'viela', 'hyvin', 'meidan', 'kanssa', 'varten', 'jalkeen', 'aikana'],
+  lt: ['ir', 'yra', 'kad', 'su', 'i', 'is', 'tai', 'ne', 'kaip', 'bet', 'jei', 'taip', 'labai', 'savo', 'musu', 'jusu', 'arba', 'per', 'po', 'prie', 'apie', 'nuo', 'iki', 'del', 'kurie', 'kuris'],
+  lv: ['un', 'ir', 'kas', 'ar', 'no', 'uz', 'par', 'bet', 'ne', 'ta', 'tie', 'to', 'lai', 'ari', 'loti', 'musu', 'jusu', 'savu', 'pec', 'pirms'],
+  hr: ['i', 'u', 'je', 'se', 'na', 'za', 'od', 'do', 's', 'o', 'po', 'kao', 'ali', 'ili', 'ako', 'koji', 'koja', 'koje', 'smo', 'su', 'ce', 'biti', 'vrlo', 'nase'],
+  sl: ['in', 'je', 'se', 'na', 'za', 'od', 'do', 'v', 'o', 'po', 'kot', 'ampak', 'ali', 'ce', 'ki', 'kateri', 'smo', 'so', 'bo', 'biti', 'zelo', 'nase'],
 };
 
-function distinctStopwords(corpus: string, words: string[]): number {
-  const tokens = new Set(corpus.split(/[^a-z]+/).filter(Boolean));
+
+
+/**
+ * Palabras funcionales DISTINTIVAS de cada idioma: las que aparecen en
+ * una sola lista. Las compartidas («en», «a», «con»…) no discriminan y
+ * no cuentan para nadie; así un boilerplate en inglés no tapa el cuerpo
+ * del anuncio cuando está en otra lengua.
+ */
+const DISTINCTIVE_STOPWORDS: Record<string, string[]> = (() => {
+  const counts = new Map<string, number>();
+  for (const words of Object.values(STOPWORDS)) {
+    for (const w of new Set(words.map((x) => norm(x).trim()).filter(Boolean))) {
+      counts.set(w, (counts.get(w) ?? 0) + 1);
+    }
+  }
+  const out: Record<string, string[]> = {};
+  for (const [lang, words] of Object.entries(STOPWORDS)) {
+    out[lang] = [...new Set(words.map((x) => norm(x).trim()).filter(Boolean))].filter(
+      (w) => counts.get(w) === 1,
+    );
+  }
+  return out;
+})();
+
+/** Apariciones (con repetición) de las palabras distintivas de un idioma. */
+function distinctiveOccurrences(chunkNorm: string, lang: string): number {
+  const set = new Set(DISTINCTIVE_STOPWORDS[lang]);
   let n = 0;
-  for (const w of words) if (tokens.has(w)) n++;
+  for (const tok of chunkNorm.split(/[^a-z]+/)) if (tok && set.has(tok)) n++;
   return n;
 }
 
-/**
- * Idioma en que está redactada la oferta ('en' | 'es' | null). Regla de
- * Jon (20-oct-2026): si el anuncio está escrito en un idioma de trabajo
- * aceptado, ese idioma vale aunque nunca lo nombre («todas las ofertas
- * en las que aplico están en inglés»; la campaña de ONGs acepta también
- * castellano). Detección conservadora: el idioma ganador debe tener
- * muchas palabras funcionales distintas y dominar (más del doble que
- * el segundo). Solo se reconocen inglés y castellano, los idiomas de
- * trabajo de Jon; cualquier otro texto devuelve null.
- */
-function corpusLanguage(corpus: string): 'en' | 'es' | null {
-  let top: string | null = null;
-  let topCount = 0;
-  let secondCount = 0;
-  for (const lang of Object.keys(STOPWORDS)) {
-    const n = distinctStopwords(corpus, STOPWORDS[lang]);
-    if (n > topCount) {
-      secondCount = topCount;
-      topCount = n;
-      top = lang;
-    } else if (n > secondCount) {
-      secondCount = n;
+/** Idioma de un fragmento, o null si no hay señal clara (≥2 distintivas y dominio sobre el segundo). */
+function chunkLanguage(chunkNorm: string): string | null {
+  let best: string | null = null;
+  let bestN = 0;
+  let secondN = 0;
+  for (const lang of Object.keys(DISTINCTIVE_STOPWORDS)) {
+    const n = distinctiveOccurrences(chunkNorm, lang);
+    if (n > bestN) {
+      secondN = bestN;
+      bestN = n;
+      best = lang;
+    } else if (n > secondN) {
+      secondN = n;
     }
   }
-  if (top !== 'en' && top !== 'es') return null;
-  if (topCount < 6 || topCount <= 2 * secondCount) return null;
-  return top;
+  if (!best || bestN < 2 || bestN < 1.5 * secondN) return null;
+  return best;
+}
+
+/**
+ * Idioma en que está REDACTADA la oferta, o null si no se puede afirmar.
+ * Voto por fragmentos (título, extractos y frases del texto completo)
+ * ponderado por caracteres: el cuerpo del anuncio pesa más que un
+ * boilerplate corporativo en inglés. Hace falta un mínimo de texto
+ * clasificado (120 caracteres) y que el ganador supere el 55 %.
+ *
+ * Regla de Jon (20-oct-2026, reforzada el 21-oct-2026): sus idiomas de
+ * trabajo son inglés y castellano; una oferta escrita en cualquier otro
+ * idioma NO cumple, aunque mencione el inglés de pasada. Caso real:
+ * DS Smith (Tallinn) con el cuerpo íntegro en estonio y boilerplate en
+ * inglés salía «cumple» porque el detector viejo solo reconocía en/es
+ * y devolvía «sin evidencia» ante cualquier otra lengua.
+ */
+function detectOfferLanguage(offer: EvalOfferInput): string | null {
+  const chunks = [offer.title, ...offer.highlights, ...fullTextChunks(offer)];
+  const charsByLang = new Map<string, number>();
+  let total = 0;
+  for (const chunk of chunks) {
+    const lang = chunkLanguage(norm(chunk));
+    if (!lang) continue;
+    charsByLang.set(lang, (charsByLang.get(lang) ?? 0) + chunk.length);
+    total += chunk.length;
+  }
+  if (total < 120) return null;
+  let winner: string | null = null;
+  let winnerChars = 0;
+  for (const [lang, chars] of charsByLang) {
+    if (chars > winnerChars) {
+      winnerChars = chars;
+      winner = lang;
+    }
+  }
+  if (!winner || winnerChars < 0.55 * total) return null;
+  return winner;
 }
 
 /** La frase de la oferta con más señal del idioma dado (como evidencia). */
-function languageEvidence(offer: EvalOfferInput, lang: 'en' | 'es'): string {
+function languageEvidence(offer: EvalOfferInput, lang: string): string {
   const sources = [offer.title, ...offer.highlights, ...fullTextChunks(offer)];
   let best = '';
   let bestScore = -1;
   for (const s of sources) {
-    const score = distinctStopwords(norm(s), STOPWORDS[lang]);
+    const score = distinctiveOccurrences(norm(s), lang);
     if (score > bestScore) {
       bestScore = score;
       best = s;
@@ -377,37 +443,61 @@ function languageEvidence(offer: EvalOfferInput, lang: 'en' | 'es'): string {
 }
 
 /** Alias aceptados por idioma al declarar el requisito. */
-const LANGUAGE_ALIASES: Record<'en' | 'es', string[]> = {
+const LANGUAGE_ALIASES: Record<string, string[]> = {
   en: ['english', 'inglés', 'ingles', 'en'],
   es: ['spanish', 'español', 'espanol', 'castellano', 'es'],
+  de: ['german', 'alemán', 'aleman', 'deutsch', 'de'],
+  fr: ['french', 'francés', 'frances', 'français', 'fr'],
+  it: ['italian', 'italiano', 'it'],
+  pt: ['portuguese', 'portugués', 'portugues', 'português', 'pt'],
+  nl: ['dutch', 'holandés', 'holandes', 'nederlands', 'nl'],
+  et: ['estonian', 'estonio', 'eesti', 'et'],
+  pl: ['polish', 'polaco', 'polski', 'pl'],
+  cs: ['czech', 'checo', 'cs'],
+  sk: ['slovak', 'eslovaco', 'sk'],
+  hu: ['hungarian', 'húngaro', 'hungaro', 'magyar', 'hu'],
+  ro: ['romanian', 'rumano', 'romana', 'ro'],
+  sv: ['swedish', 'sueco', 'svenska', 'sv'],
+  da: ['danish', 'danés', 'danes', 'dansk', 'da'],
+  no: ['norwegian', 'noruego', 'norsk', 'no'],
+  fi: ['finnish', 'finlandés', 'finlandes', 'suomi', 'fi'],
+  lt: ['lithuanian', 'lituano', 'lietuviu', 'lt'],
+  lv: ['latvian', 'letón', 'leton', 'latviesu', 'lv'],
+  hr: ['croatian', 'croata', 'hrvatski', 'hr'],
+  sl: ['slovenian', 'esloveno', 'slovenscina', 'sl'],
 };
 
 function matchLanguage(req: MandatoryRequirement, offer: EvalOfferInput, corpus: string): MandatoryDetail {
   const languages = (req.params['languages'] as string[] | undefined) ?? [];
-  const found = includesAny(corpus, languages);
-  if (found.length > 0) {
-    return {
-      requisito_id: req.id,
-      descripcion: req.description,
-      estado: 'cumple',
-      evidencia: findEvidence(offer, found),
-    };
-  }
-  // Sin mención literal: si la oferta ESTÁ REDACTADA en un idioma pedido
-  // (inglés o castellano), el requisito se cumple igualmente.
-  const detected = corpusLanguage(corpus);
+  const base: Omit<MandatoryDetail, 'estado' | 'evidencia'> = {
+    requisito_id: req.id,
+    descripcion: req.description,
+  };
+  // 1) Idioma de REDACCIÓN: manda sobre cualquier mención de pasada.
+  //    Escrita en un idioma pedido → cumple. Escrita en un TERCER
+  //    idioma (ni inglés ni castellano, los de trabajo de Jon) →
+  //    incumple: una oferta en estonio «menciona» el inglés en su
+  //    boilerplate y aun así no es una oferta en inglés. Si está en
+  //    inglés o castellano pero la campaña pide el otro, no se suspende
+  //    automáticamente: se cae a la mención literal de siempre.
+  const detected = detectOfferLanguage(offer);
   if (detected) {
     const requested = languages.map((l) => norm(l));
-    if (LANGUAGE_ALIASES[detected].some((a) => requested.includes(a))) {
-      return {
-        requisito_id: req.id,
-        descripcion: req.description,
-        estado: 'cumple',
-        evidencia: languageEvidence(offer, detected),
-      };
+    const aliases = (LANGUAGE_ALIASES[detected] ?? [detected]).map((a) => norm(a));
+    const accepted = aliases.some((a) => requested.includes(a));
+    if (accepted) {
+      return { ...base, estado: 'cumple', evidencia: languageEvidence(offer, detected) };
+    }
+    if (detected !== 'en' && detected !== 'es') {
+      return { ...base, estado: 'incumple', evidencia: languageEvidence(offer, detected) };
     }
   }
-  return { requisito_id: req.id, descripcion: req.description, estado: 'sin_evidencia', evidencia: '' };
+  // 2) Sin detección fiable (texto corto o muy mezclado): mención literal.
+  const found = includesAny(corpus, languages);
+  if (found.length > 0) {
+    return { ...base, estado: 'cumple', evidencia: findEvidence(offer, found) };
+  }
+  return { ...base, estado: 'sin_evidencia', evidencia: '' };
 }
 
 function matchLocation(req: MandatoryRequirement, offer: EvalOfferInput, corpus: string): MandatoryDetail {

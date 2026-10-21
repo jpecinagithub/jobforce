@@ -380,7 +380,10 @@ describe('evaluateOffer', () => {
     assert.equal(ing?.estado, 'sin_evidencia');
   });
 
-  it('idioma: oferta redactada en alemán → sin_evidencia de inglés', () => {
+  it('idioma: oferta redactada en alemán → INCUMPLE el requisito de inglés', () => {
+    // Regla de Jon (21-oct-2026): una oferta escrita en un idioma que no
+    // es ni inglés ni castellano no cumple, aunque antes el motor la
+    // dejaba en «sin_evidencia» por conservadurismo.
     const res = evaluateOffer(
       {
         title: 'Finanzmanager',
@@ -393,7 +396,35 @@ describe('evaluateOffer', () => {
       FACTS,
     );
     const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
-    assert.equal(ing?.estado, 'sin_evidencia');
+    assert.equal(ing?.estado, 'incumple');
+    assert.equal(res.mandatory_verdict, 'incumple');
+  });
+
+  it('idioma: cuerpo en estonio con boilerplate en inglés → INCUMPLE (caso DS Smith)', () => {
+    // Caso real (21-oct-2026): el texto de Exa mezcla boilerplate
+    // corporativo en inglés con el cuerpo íntegro en estonio; la oferta
+    // salía «cumple» porque «english» aparece mencionado de pasada.
+    const cuerpoEstonio = [
+      'Pearaamatupidaja - Finantsjuht. Kas soovid olla rohkem kui raamatupidaja? Otsime oma meeskonda pearaamatupidaja-finantsjuhti, kes on ettevõtte finantsvaldkonna võtmeisik ning oluline partner juhtkonnale strateegiliste otsuste tegemisel.',
+      'Sinu roll: sellel ametikohal vastutad ettevõtte finantsjuhtimise, aruandluse ja eelarvestamise eest ning aitad kaasa ettevõtte jätkusuutlikule arengule. Peamised ülesanded on finantsarvestuse ja aruandluse korraldamine ning kvaliteedi tagamine.',
+      'Ootame Sind kandideerima, kui Sul on kõrgharidus finantsvaldkonnas, varasem kogemus finantsjuhi ametikohal, head teadmised finantsarvestusest ja väga hea eesti ja inglise keele oskus ning tugev analüütiline mõtlemine.',
+    ].join(' ');
+    const res = evaluateOffer(
+      {
+        title: 'Finance manager',
+        url: 'https://example.com/jobs/ee',
+        highlights: ['Finance manager at DS Smith, Tallinn'],
+        fullText:
+          'DS Smith is a public company. DS Smith provides innovative packaging solutions, paper products and recycling services with a commitment to sustainability and a circular economy for our customers. ' +
+          cuerpoEstonio,
+      },
+      defaultCriteria(),
+      FACTS,
+    );
+    const ing = res.mandatory_details.find((d) => d.requisito_id === 'ingles');
+    assert.equal(ing?.estado, 'incumple');
+    assert.equal(res.mandatory_verdict, 'incumple');
+    assert.equal(res.score, null);
   });
 
   it('la evidencia nunca supera los 200 caracteres', () => {
