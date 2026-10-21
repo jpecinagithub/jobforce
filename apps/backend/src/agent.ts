@@ -392,29 +392,31 @@ async function processOfferUrl(
     return;
   }
   await setJobState(jobId, { applicationId: prep.applicationId, step: 'documentos' });
+  let yaAprobada = false;
   if (prep.motivo === 'ya_en_curso_o_finalizada') {
     const st = await query<{ status: string }>(
       `SELECT status FROM applications WHERE id = $1`,
       [prep.applicationId],
     );
     const estado = st[0]?.status ?? prep.status;
-    if (estado !== 'ready_for_review') {
+    const envios = await query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM sends WHERE application_id = $1`,
+      [prep.applicationId],
+    );
+    // Reanudable: preparada sin enviar, o aprobada en un encargo
+    // anterior cuyo envío nunca llegó a encolarse (p. ej. bloqueado
+    // entonces por un portal aún sin driver).
+    const reanudable =
+      estado === 'ready_for_review' || (estado === 'approved' && envios[0].n === 0);
+    if (!reanudable) {
       await say(
         `ℹ️ Ya existe una candidatura para esta oferta en estado «${estado}». No duplico: puedes seguirla en Revisión/Histórico.`,
       );
       await setJobState(jobId, { status: 'done', step: 'ya_existia' });
       return;
     }
-    // Preparada pero sin enviar (p. ej. de un encargo anterior que se
-    // detuvo en un portal sin driver): se RETOMA con la orden actual.
-    // Se reclasifica el portal con el detector vigente (puede haber
-    // ganado driver desde entonces, p. ej. iCIMS).
-    const portalAhora = detectarPortal(url);
-    await query(
-      `UPDATE applications SET portal = $2, updated_at = now() WHERE id = $1 AND portal <> $2`,
-      [prep.applicationId, portalAhora],
-    );
-    await say('↩️ Retomo la candidatura que ya estaba preparada en Revisión: sigo con el envío.');
+    yaAprobada = estado === 'approved';
+    await say('↩️ Retomo la candidatura que ya estaba preparada: sigo con el envío.');
   } else {
     const docs = await query<{ kind: string }>(
       `SELECT DISTINCT kind FROM documents WHERE application_id = $1`,
@@ -425,6 +427,14 @@ async function processOfferUrl(
         'Tu orden en este chat cuenta como aprobación expresa: sigo con el envío.',
     );
   }
+
+  // Reclasificación del portal con el detector vigente: la fila pudo
+  // crearse cuando el portal aún no tenía driver (p. ej. «otro» antes
+  // de existir iCIMS) y decidirEnvio usa el portal GUARDADO.
+  await query(
+    `UPDATE applications SET portal = $2, updated_at = now() WHERE id = $1 AND portal <> $2`,
+    [prep.applicationId, detectarPortal(url)],
+  );
 
   // 5) Canal de envío.
   const offerRow = await query<{
@@ -444,7 +454,9 @@ async function processOfferUrl(
       [prep.applicationId, JSON.stringify({ ordenDirecta: true, ordenDirectaJobId: jobId })],
     );
     await setJobState(jobId, { step: 'aprobacion_envio' });
-    await applyDecision(prep.applicationId, 'approve', undefined, ctx.actorId);
+    if (!yaAprobada) {
+      await applyDecision(prep.applicationId, 'approve', undefined, ctx.actorId);
+    }
     await auditEvent({
       actorId: ctx.actorId,
       action: 'agent_application_approved',
