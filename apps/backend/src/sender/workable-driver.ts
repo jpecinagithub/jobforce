@@ -270,6 +270,17 @@ export class WorkableDriver implements BrowserDriver {
               var r = frames[i].getBoundingClientRect();
               if (r.bottom > 0 && r.top < window.innerHeight) return true;
             }
+            if (/challenges\.cloudflare\.com/.test(src)) {
+              var st2 = window.getComputedStyle(frames[i]);
+              if (st2.visibility !== 'hidden' && st2.display !== 'none' && frames[i].offsetWidth > 100) return true;
+            }
+          }
+          // Cloudflare Turnstile: «Verify you are human» sin marcar.
+          if (/verify you are human/i.test(document.body ? (document.body.innerText || '') : '')) {
+            var boxes = document.querySelectorAll('input[type="checkbox"]');
+            for (var b = 0; b < boxes.length; b++) {
+              if (!boxes[b].checked && (boxes[b].offsetWidth || boxes[b].offsetHeight)) return true;
+            }
           }
           return false;
         })()`);
@@ -530,29 +541,37 @@ export class WorkableDriver implements BrowserDriver {
         `no se encontró el botón «Submit application» en Workable (URL: ${page.url()})`,
       );
     }
-    await page.waitForTimeout(6000);
-    capturas.push(await this.capturar(page, job, 'workable-tras-envio.png'));
-    if (await this.captchaVisible(page)) {
-      throw new AnomaliaEnvio(
-        'captcha_mfa',
-        'captcha con desafío visible tras pulsar Enviar en Workable: el envío puede no haberse completado',
-        { trasClick: true },
-      );
-    }
-    const texto = await page.evaluate<string>(TEXTO_JS).catch(() => '');
-    if (SUCCESS_RE.test(texto) || /apply\/confirmation|thank/i.test(page.url())) {
-      return {
-        confirmado: true,
-        confirmacion: {
-          mensaje: 'Workable confirmó la recepción de la candidatura.',
-          urlTrasEnvio: page.url(),
-          referencia: null,
+    // Sondeo: éxito, o el muro de verificación humana (Turnstile de
+    // Cloudflare aparece junto al botón y deja el envío en
+    // «Submitting…» sin completar: NO es un envío dudoso, es una
+    // atestación que debe hacer Jon).
+    for (let espera = 0; espera < 8; espera++) {
+      await page.waitForTimeout(3000);
+      const textoSon = await page.evaluate<string>(TEXTO_JS).catch(() => '');
+      if (SUCCESS_RE.test(textoSon) || /apply\/confirmation|thank/i.test(page.url())) {
+        capturas.push(await this.capturar(page, job, 'workable-tras-envio.png'));
+        return {
+          confirmado: true,
+          confirmacion: {
+            mensaje: 'Workable confirmó la recepción de la candidatura.',
+            urlTrasEnvio: page.url(),
+            referencia: null,
+            capturas,
+          },
           capturas,
-        },
-        capturas,
-        evidencia: { portal: 'workable' },
-      };
+          evidencia: { portal: 'workable' },
+        };
+      }
+      if (await this.captchaVisible(page)) {
+        capturas.push(await this.capturar(page, job, 'workable-tras-envio.png'));
+        throw new AnomaliaEnvio(
+          'captcha_mfa',
+          'Workable exige verificar que eres humano (Cloudflare Turnstile) para completar el envío: la candidatura quedó rellenada sin enviar',
+          { trasClick: true },
+        );
+      }
     }
+    capturas.push(await this.capturar(page, job, 'workable-tras-envio.png'));
     return { confirmado: false, capturas, evidencia: { portal: 'workable' } };
   }
 }
