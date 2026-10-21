@@ -47,7 +47,8 @@ import {
 // ---------------------------------------------------------------------------
 
 interface PwElementHandle {
-  evaluate<R>(fn: string | ((el: never) => R)): Promise<R>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  evaluate<R>(fn: string | ((el: any, arg?: any) => R), arg?: unknown): Promise<R>;
 }
 
 interface PwFrame {
@@ -394,21 +395,23 @@ export class IcimsDriver implements BrowserDriver {
     // Contraseña si ya hay cuenta (login directo).
     const pass = campos.find((c) => c.tipo === 'password');
     if (pass && !pass.valor) await frame.fill(pass.sel, d.cuentaPassword);
-    // Casilla de aceptación de privacidad/condiciones.
-    const checks = await frame.$$('input[type="checkbox"]');
-    for (const h of checks) {
-      const ctx = await h
-        .evaluate<string>(
-          `((el) => { var n = el; for (var k = 0; n && k < 6; k++) { var t = (n.textContent || '').trim(); if (t) return t.slice(0, 300); n = n.parentElement; } return ''; })` as never,
-        )
-        .catch(() => '');
-      if (/accept|agree|privacy|consent|acept|consentimiento/i.test(ctx)) {
-        const marcado = await h
-          .evaluate<boolean>(`((el) => (el as HTMLInputElement).checked)` as never)
-          .catch(() => false);
-        if (!marcado) {
-          await h.evaluate(`((el) => (el as HTMLElement).click())` as never).catch(() => undefined);
-        }
+    // Casilla de aceptación de privacidad/condiciones (consentimiento
+    // de Jon para aplicar): en esta pantalla hay una sola y nace sin
+    // marcar; «Next» permanece deshabilitado hasta aceptarla.
+    const casillas = campos.filter((c) => c.tipo === 'checkbox');
+    const casilla =
+      casillas.find((c) => /accept|agree|privacy|consent|acept/i.test(c.etiqueta)) ??
+      (casillas.length === 1 ? casillas[0] : undefined);
+    if (casilla) {
+      const handle = await frame.$(casilla.sel);
+      const marcada = handle
+        ? await handle
+            .evaluate<boolean>((el: { checked?: boolean }) => !!el.checked)
+            .catch(() => false)
+        : false;
+      if (!marcada) {
+        await frame.click(casilla.sel, { timeout: 8000 }).catch(() => undefined);
+        await page.waitForTimeout(700);
       }
     }
     const ok = await this.pulsarBoton(frame, BOTONES_AVANCE);
@@ -514,9 +517,15 @@ export class IcimsDriver implements BrowserDriver {
             const el = await frame.$(c.sel);
             if (el) {
               await el
-                .evaluate(
-                  `((el) => { var s = el as HTMLSelectElement; for (var i = 0; i < s.options.length; i++) { if ((s.options[i].textContent || '').trim() === ${JSON.stringify(opcion)}) { s.selectedIndex = i; s.dispatchEvent(new Event('change', { bubbles: true })); break; } } })` as never,
-                )
+                .evaluate((sel: HTMLSelectElement, objetivo: string) => {
+                  for (let i = 0; i < sel.options.length; i++) {
+                    if ((sel.options[i].textContent || '').trim() === objetivo) {
+                      sel.selectedIndex = i;
+                      sel.dispatchEvent(new Event('change', { bubbles: true }));
+                      break;
+                    }
+                  }
+                }, opcion)
                 .catch(() => undefined);
               tocados++;
             }
@@ -528,9 +537,17 @@ export class IcimsDriver implements BrowserDriver {
           const el = await frame.$(c.sel);
           if (el) {
             await el
-              .evaluate(
-                `((el) => { var s = el as HTMLSelectElement; var objetivo = ${JSON.stringify(v)}.toLowerCase(); for (var i = 0; i < s.options.length; i++) { var t = (s.options[i].textContent || '').trim(); if (t.toLowerCase() === objetivo || t.toLowerCase().indexOf(objetivo) === 0) { s.selectedIndex = i; s.dispatchEvent(new Event('change', { bubbles: true })); break; } } })` as never,
-              )
+              .evaluate((sel: HTMLSelectElement, objetivo: string) => {
+                const buscado = objetivo.toLowerCase();
+                for (let i = 0; i < sel.options.length; i++) {
+                  const t = (sel.options[i].textContent || '').trim();
+                  if (t.toLowerCase() === buscado || t.toLowerCase().indexOf(buscado) === 0) {
+                    sel.selectedIndex = i;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    break;
+                  }
+                }
+              }, v)
               .catch(() => undefined);
             tocados++;
           }
