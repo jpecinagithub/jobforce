@@ -194,13 +194,11 @@ export default async function CampaignDetailPage({
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <Link href={`/campanas/${campaign.id}/ofertas/${o.id}`}>Ver</Link>
-                    {o.application && (
-                      <DeleteOfferButton
-                        campaignId={campaign.id}
-                        offerId={o.id}
-                        offerTitle={o.title || o.url || 'esta oferta'}
-                      />
-                    )}
+                    <DeleteOfferButton
+                      campaignId={campaign.id}
+                      offerId={o.id}
+                      offerTitle={o.title || o.url || 'esta oferta'}
+                    />
                   </td>
                 </tr>
               );
