@@ -448,9 +448,11 @@ describe('ejecutor de envíos', () => {
 
   it('portal sin driver probado → fuera_de_politica, sin simular', async () => {
     await autorizarAutomatico(app, auth);
-    const applicationId = await crearCandidatura({ portal: 'ashby' });
-    // request-send rechazaría ashby (no está en portalesPermitidos); se
-    // inserta directo para probar la puerta del ejecutor.
+    const applicationId = await crearCandidatura({ portal: 'smartrecruiters' });
+    // request-send rechazaría smartrecruiters (no está en
+    // portalesPermitidos ni tiene driver); se inserta directo para
+    // probar la puerta del ejecutor. (Antes el fixture era ashby;
+    // desde 2026-10-22 Ashby SÍ tiene driver y está permitido.)
     const s = await query<{ id: string }>(
       `INSERT INTO sends (application_id, idempotency_key, policy_version, status, evidence)
        VALUES ($1, $2, 2, 'queued', '{}'::jsonb) RETURNING id`,
