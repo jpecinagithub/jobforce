@@ -84,7 +84,7 @@ interface ApplicationRow {
   /** URL operativa de aplicación: offers.apply_url si está resuelta; si no, la de la oferta. */
   offer_url: string | null;
   /** URL donde se encontró la oferta (la bolsa o el portal), sin resolver. */
-  source_url: string | null;
+  source_url?: string | null;
   offer_company: string | null;
   score: string | null;
   mandatory_verdict: string | null;
