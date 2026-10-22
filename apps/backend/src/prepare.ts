@@ -62,6 +62,7 @@ const PORTALES: Array<{ patron: string; portal: string; nombre: string }> = [
   { patron: 'smartrecruiters', portal: 'smartrecruiters', nombre: 'SmartRecruiters' },
   { patron: 'workday', portal: 'workday', nombre: 'Workday' },
   { patron: 'myworkdayjobs', portal: 'workday', nombre: 'Workday' },
+  { patron: 'ashbyhq.com', portal: 'ashby', nombre: 'Ashby' },
 ];
 
 export function detectarPortal(url: string | null | undefined): string {

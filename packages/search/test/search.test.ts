@@ -685,6 +685,43 @@ describe('ReliefWeb (API oficial)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Ashby: manda su API pública de la bolsa (la SPA responde «Job not found»)
+// ---------------------------------------------------------------------------
+
+describe('Ashby (posting-api)', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const VIVA = 'd33db597-0b1f-4170-9095-9c32b6b18443';
+  const MUERTA = 'd1be3425-2d78-4141-9f9c-10f61930ccbf';
+  const URL_VIVA = `https://jobs.ashbyhq.com/possible-finance/${VIVA}`;
+  const URL_MUERTA = `https://jobs.ashbyhq.com/possible-finance/${MUERTA}/application`;
+
+  it('ashbyJobRef extrae org e id solo de URLs de oferta de Ashby', async () => {
+    const { ashbyJobRef } = await import('../src/index.ts');
+    assert.deepEqual(ashbyJobRef(URL_VIVA), { org: 'possible-finance', id: VIVA });
+    assert.deepEqual(ashbyJobRef(URL_MUERTA), { org: 'possible-finance', id: MUERTA });
+    assert.equal(ashbyJobRef('https://jobs.ashbyhq.com/possible-finance'), null);
+    assert.equal(ashbyJobRef('https://example.com/possible-finance/' + VIVA), null);
+  });
+
+  it('id presente en la bolsa → alive; ausente → broken (vía ashby_api)', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ jobs: [{ id: VIVA }, { id: 'otra' }] }), { status: 200 })) as typeof fetch;
+    assert.deepEqual(await checkUrlStatusDetailed(URL_VIVA), { status: 'alive', via: 'ashby_api' });
+    assert.deepEqual(await checkUrlStatusDetailed(URL_MUERTA), { status: 'broken', via: 'ashby_api' });
+  });
+
+  it('API no disponible → unknown (nunca roto sin evidencia)', async () => {
+    globalThis.fetch = (async () => new Response('no', { status: 503 })) as typeof fetch;
+    assert.deepEqual(await checkUrlStatusDetailed(URL_VIVA), { status: 'unknown', via: 'ashby_api' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // extractApplyUrl
 // ---------------------------------------------------------------------------
 

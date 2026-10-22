@@ -81,7 +81,10 @@ interface ApplicationRow {
   offer_id: string;
   status: string;
   portal: string | null;
+  /** URL operativa de aplicación: offers.apply_url si está resuelta; si no, la de la oferta. */
   offer_url: string | null;
+  /** URL donde se encontró la oferta (la bolsa o el portal), sin resolver. */
+  source_url: string | null;
   offer_company: string | null;
   score: string | null;
   mandatory_verdict: string | null;
@@ -95,7 +98,8 @@ async function loadApplicationInternal(id: string): Promise<ApplicationRow | nul
   const rows = await query<ApplicationRow>(
     `SELECT a.id, a.campaign_id, a.offer_id, a.status, a.portal,
             a.offer_snapshot,
-            o.url AS offer_url, o.company AS offer_company,
+            COALESCE(o.apply_url, o.url) AS offer_url, o.url AS source_url,
+            o.company AS offer_company,
             e.score::text AS score, e.mandatory_verdict
        FROM applications a
        JOIN offers o ON o.id = a.offer_id

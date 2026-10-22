@@ -51,6 +51,8 @@ import { crearDriver } from './driver.js';
 import { IcimsDriver } from './icims-driver.js';
 import { WorkableDriver } from './workable-driver.js';
 import { WorkdayDriver } from './workday-driver.js';
+import { AshbyDriver } from './ashby-driver.js';
+import { resolverCanalReal } from './resolve-channel.js';
 import { presupuestoDisponible, registrarTiempoNavegador } from '@jobforce/costs';
 import {
   AnomaliaEnvio,
@@ -209,7 +211,7 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
   const shotsDir = join(base, 'jobforce', 'sends', send.id, 'capturas');
   mkdirSync(shotsDir, { recursive: true });
 
-  if (portal === 'icims' || portal === 'workable' || portal === 'workday') {
+  if (portal === 'icims' || portal === 'workable' || portal === 'workday' || portal === 'ashby') {
     // iCIMS y Workable no usan selectores preconfigurados: el driver
     // rellena el formulario por etiquetas con los datos del perfil
     // (iCIMS además con la cuenta del portal, creada cifrada si no
@@ -261,7 +263,7 @@ async function cargarTrabajo(send: SendRow, deps: ExecutorDeps): Promise<Trabajo
     // web pública puede ser un alias de la organización).
     const cuentaHost = hostCuentaIcims(host);
     const cuenta =
-      portal === 'workable'
+      portal === 'workable' || portal === 'ashby'
         ? { email: candidato.identity.email, password: '' }
         : deps.cuentaPortal
           ? await deps.cuentaPortal(cuentaHost, candidato.identity.email)
@@ -511,6 +513,48 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
     //    crea su propio bloqueo más abajo, antes de la fase del navegador.
     await query(`DELETE FROM send_locks WHERE application_id = $1`, [send.application_id]);
 
+    // 2b) Resolución del canal real (global, 2026-10-22): si la
+    //     candidatura se clasificó «otro» porque la oferta se encontró
+    //     en una BOLSA (The Impact Job, LinkedIn…), se sigue la bolsa
+    //     hasta el portal del empleador ANTES de cargar el trabajo y
+    //     de la puerta de política: que el destino sea un portal
+    //     soportado no puede depender de dónde se encontró la oferta.
+    //     La resolución nunca bloquea: si no hay evidencia, la puerta
+    //     juzga lo que haya.
+    try {
+      const appPre = await loadApplication(send.application_id);
+      if (appPre && (appPre.portal ?? '').trim().toLowerCase() === 'otro') {
+        const res = await resolverCanalReal(appPre.source_url ?? appPre.offer_url ?? '');
+        if (res && 'portal' in res) {
+          await query(`UPDATE offers SET apply_url = $1 WHERE id = $2`, [
+            res.url,
+            appPre.offer_id,
+          ]);
+          await query(`UPDATE applications SET portal = $1 WHERE id = $2`, [
+            res.portal,
+            appPre.id,
+          ]);
+          await auditEvent({
+            actorId,
+            action: 'canal_real_resuelto',
+            entityType: 'application',
+            entityId: appPre.id,
+            details: { desde: appPre.source_url, hacia: res.url, portal: res.portal, via: res.via },
+          });
+        } else if (res && 'email' in res) {
+          await auditEvent({
+            actorId,
+            action: 'canal_email_detectado',
+            entityType: 'application',
+            entityId: appPre.id,
+            details: { desde: appPre.source_url, email: res.email, via: res.via },
+          });
+        }
+      }
+    } catch {
+      // Sin resolución: sigue el flujo normal.
+    }
+
     // 3) Carga + verificación de documentos (puede lanzar AnomaliaEnvio).
     let trabajo;
     try {
@@ -575,7 +619,9 @@ export async function procesarEnvio(sendId: string, deps: ExecutorDeps = {}): Pr
               ? new WorkableDriver()
               : j.portal === 'workday'
                 ? new WorkdayDriver()
-                : crearDriver(j.portal));
+                : j.portal === 'ashby'
+                  ? new AshbyDriver()
+                  : crearDriver(j.portal));
       driver = factory(job);
     } catch (e) {
       if (e instanceof AnomaliaEnvio) {

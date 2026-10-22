@@ -789,7 +789,7 @@ const isGoneStatus = (status: number): boolean => status === 404 || status === 4
 const isDnsGone = (err: unknown): boolean => errorCodes(err).has('ENOTFOUND');
 
 /** Vía que produjo el veredicto: API del portal, sitio del empleador, contenido o sonda HTTP genérica. */
-export type UrlCheckVia = 'workday_api' | 'breezy_content' | 'jnj_careers' | 'reliefweb_api' | 'http';
+export type UrlCheckVia = 'workday_api' | 'breezy_content' | 'jnj_careers' | 'reliefweb_api' | 'ashby_api' | 'http';
 
 export interface UrlCheckDetail {
   status: UrlStatus;
@@ -986,8 +986,51 @@ async function checkReliefWebStatus(id: string): Promise<UrlCheckDetail> {
   }
 }
 
+/** Referencia {org, id} de una oferta de Ashby desde su URL, o null. */
+export function ashbyJobRef(url: string): { org: string; id: string } | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname !== 'jobs.ashbyhq.com') return null;
+    const m = u.pathname.match(/^\/([^/]+)\/([0-9a-fA-F-]{36})(?:\/application)?\/?$/);
+    if (!m) return null;
+    return { org: m[1], id: m[2] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ashby: la página del puesto es una SPA que responde 200 «Job not
+ * found» para ofertas retiradas — la sonda HTML no distingue. Su API
+ * pública de la bolsa (posting-api) sí: si el id no está entre los
+ * puestos listados de la organización, la oferta ya no existe (caso
+ * real 2026-10-22: Possible Finance retiró el puesto y la bolsa
+ * The Impact Job seguía enlazándolo como vivo).
+ */
+async function checkAshbyStatus(ref: { org: string; id: string }): Promise<UrlCheckDetail> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), URL_CHECK_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(ref.org)}`,
+      { method: 'GET', signal: controller.signal, headers: { Accept: 'application/json' } },
+    );
+    if (res.status !== 200) return { status: 'unknown', via: 'ashby_api' };
+    const body = (await res.json().catch(() => null)) as { jobs?: Array<{ id?: string }> } | null;
+    if (!body || !Array.isArray(body.jobs)) return { status: 'unknown', via: 'ashby_api' };
+    const viva = body.jobs.some((j) => j && j.id === ref.id);
+    return { status: viva ? 'alive' : 'broken', via: 'ashby_api' };
+  } catch {
+    return { status: 'unknown', via: 'ashby_api' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function checkUrlStatusDetailed(url: string): Promise<UrlCheckDetail> {
   if (isBreezyUrl(url)) return checkBreezyStatus(url);
+  const ashby = ashbyJobRef(url);
+  if (ashby) return checkAshbyStatus(ashby);
   const rwId = reliefWebJobId(url);
   if (rwId) return checkReliefWebStatus(rwId);
   const cxs = workdayCxsJobUrl(url);
