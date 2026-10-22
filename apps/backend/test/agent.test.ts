@@ -135,6 +135,7 @@ describe('agente conversacional', () => {
 
   it('flujo completo Personio: ingesta → documentos → aprobada → envío encolado', async () => {
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async () => ({
         id: 'exa-test',
         title: 'Finance Manager at Acme Corp',
@@ -177,6 +178,7 @@ describe('agente conversacional', () => {
 
   it('enlace confirmado roto: se para sin crear oferta ni candidatura', async () => {
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async () => {
         throw new Error('getContents no debe llamarse si el enlace está roto');
       },
@@ -195,6 +197,7 @@ describe('agente conversacional', () => {
     const EMAIL_URL = 'https://www.devex.com/jobs/finance-manager-email-222';
     const sent: { to?: string; subject?: string; attachments?: string[] } = {};
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async () => ({
         id: 'exa-test',
         title: 'Finance Manager at Acme Corp',
@@ -230,6 +233,7 @@ describe('agente conversacional', () => {
   it('canal email SIN permiso de envío: motivo concreto y preparada, sin aprobar', async () => {
     const EMAIL_URL = 'https://www.devex.com/jobs/finance-manager-email-333';
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async () => ({
         id: 'exa-test',
         title: 'Finance Manager at Acme Corp',
@@ -259,6 +263,7 @@ describe('agente conversacional', () => {
   it('derivación: el anuncio remite a Personio → el encargo se cumple allí', async () => {
     const AGG_URL = 'https://reliefweb.int/job/999000/finance-officer';
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async (u: string) =>
         u === AGG_URL
           ? {
@@ -299,6 +304,7 @@ describe('agente conversacional', () => {
   it('flujo iCIMS (Sightsavers): aprueba con orden directa y encola el envío', async () => {
     const ICIMS_URL = 'https://careers.sightsavers.org/jobs/1669?lang=en-us';
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async () => ({
         id: 'exa-test',
         title: 'Project Finance Officer in Monrovia, Liberia | Sightsavers',
@@ -328,6 +334,7 @@ describe('agente conversacional', () => {
   it('flujo Workable: aprueba con orden directa y encola el envío', async () => {
     const WORKABLE_URL = 'https://apply.workable.com/euromonitor/j/2D69E85A31';
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async () => ({
         id: 'exa-test',
         title: 'Accounting Manager - Euromonitor',
@@ -355,6 +362,7 @@ describe('agente conversacional', () => {
 
   it('portal sin driver (Greenhouse): queda preparada en Revisión, sin aprobar', async () => {
     setAgentTestDeps({
+      resolveChannel: async () => null,
       getContents: async () => ({
         id: 'exa-test',
         title: 'Finance Manager at Acme Corp',

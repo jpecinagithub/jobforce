@@ -42,6 +42,7 @@ import {
   type ExaResult,
 } from '@jobforce/search';
 import { auditEvent } from './audit.js';
+import { resolverCanalReal, type ResolucionCanal } from './sender/resolve-channel.js';
 import {
   gmailSendCapable,
   sendGmailApplication,
@@ -73,6 +74,8 @@ export interface AgentDeps {
   pollMax?: number;
   /** Canal email (tests): capacidad y envío por Gmail. */
   gmailCanSend?: () => Promise<boolean>;
+  /** Resolución del canal real bolsa→portal (tests la anulan). */
+  resolveChannel?: (url: string) => Promise<ResolucionCanal | null>;
   sendEmail?: (input: GmailApplicationInput) => Promise<{ messageId: string }>;
 }
 
@@ -430,12 +433,29 @@ async function processOfferUrl(
     );
   }
 
+  // Resolución del canal real (global, 2026-10-22): si la URL del
+  // encargo es una BOLSA («otro»), se sigue hasta el portal del
+  // empleador y el canal se decide por el DESTINO, no por la bolsa —
+  // la misma regla que aplica el worker al procesar el envío.
+  let portal = detectarPortal(url);
+  if (portal === 'otro') {
+    const resolver = testDeps.resolveChannel ?? resolverCanalReal;
+    const res = await resolver(url).catch(() => null);
+    if (res && 'portal' in res) {
+      portal = res.portal;
+      await query(`UPDATE offers SET apply_url = $1 WHERE id = $2`, [res.url, offerId]);
+      await say(
+        `🔎 La oferta está en una bolsa, pero se aplica en el portal del empleador: ${portal} — sigo por ahí.`,
+      );
+    }
+  }
+
   // Reclasificación del portal con el detector vigente: la fila pudo
   // crearse cuando el portal aún no tenía driver (p. ej. «otro» antes
   // de existir iCIMS) y decidirEnvio usa el portal GUARDADO.
   await query(
     `UPDATE applications SET portal = $2, updated_at = now() WHERE id = $1 AND portal <> $2`,
-    [prep.applicationId, detectarPortal(url)],
+    [prep.applicationId, portal],
   );
 
   // 5) Canal de envío.
@@ -443,7 +463,6 @@ async function processOfferUrl(
     application_email: string | null;
     application_notes: string | null;
   }>(`SELECT application_email, application_notes FROM offers WHERE id = $1`, [offerId]);
-  const portal = detectarPortal(url);
 
   if (portal === 'personio' || portal === 'icims' || portal === 'workable' || portal === 'workday' || portal === 'ashby') {
     // 5a) Portal con driver: aprobación (la orden del chat) + worker.
