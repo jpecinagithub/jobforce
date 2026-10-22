@@ -17,6 +17,7 @@ import {
   extractLocation,
   jnjCareersJobUrl,
   reliefWebJobId,
+  ashbyJobRef,
   workdayCxsJobUrl,
   looksLikePersonProfile,
   extractApplicationContact,
@@ -700,8 +701,7 @@ describe('Ashby (posting-api)', () => {
   const URL_VIVA = `https://jobs.ashbyhq.com/possible-finance/${VIVA}`;
   const URL_MUERTA = `https://jobs.ashbyhq.com/possible-finance/${MUERTA}/application`;
 
-  it('ashbyJobRef extrae org e id solo de URLs de oferta de Ashby', async () => {
-    const { ashbyJobRef } = await import('../src/index.ts');
+  it('ashbyJobRef extrae org e id solo de URLs de oferta de Ashby', () => {
     assert.deepEqual(ashbyJobRef(URL_VIVA), { org: 'possible-finance', id: VIVA });
     assert.deepEqual(ashbyJobRef(URL_MUERTA), { org: 'possible-finance', id: MUERTA });
     assert.equal(ashbyJobRef('https://jobs.ashbyhq.com/possible-finance'), null);
